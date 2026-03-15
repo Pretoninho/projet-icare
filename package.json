@@ -1,0 +1,1 @@
+{"name": "deribit-options-analysis", "version": "1.0.0", "description": "A full-stack web application for Deribit options analysis.", "main": "index.js", "scripts": {"test": "echo 'Error: no test specified' && exit 1"}, "keywords": ["Deribit", "options", "analysis", "full-stack"], "author": "Pretoninho", "license": "ISC"}
