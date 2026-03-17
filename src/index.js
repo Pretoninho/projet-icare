@@ -21,6 +21,14 @@ const TS_AGG_POLICY_START_OFFSET = process.env.TS_AGG_POLICY_START_OFFSET || "7 
 const TS_AGG_POLICY_END_OFFSET = process.env.TS_AGG_POLICY_END_OFFSET || "1 minute";
 const TS_AGG_POLICY_SCHEDULE = process.env.TS_AGG_POLICY_SCHEDULE || "1 minute";
 const ANALYTICS_DEFAULT_WINDOW_MS = Number(process.env.ANALYTICS_DEFAULT_WINDOW_MS || 300000);
+const FEATURE_WINDOW_FAST = Number(process.env.FEATURE_WINDOW_FAST || 5);
+const FEATURE_WINDOW_SLOW = Number(process.env.FEATURE_WINDOW_SLOW || 20);
+const SIGNAL_HORIZON_POINTS = Number(process.env.SIGNAL_HORIZON_POINTS || 15);
+const SIGNAL_MIN_PROBABILITY = Number(process.env.SIGNAL_MIN_PROBABILITY || 0.55);
+const BACKTEST_DEFAULT_LABELS = Number(process.env.BACKTEST_DEFAULT_LABELS || 200);
+const DERIBIT_SERIES_PATH = process.env.DERIBIT_SERIES_PATH || "series_deribit.jsonl";
+const FEATURES_SERIES_PATH = process.env.FEATURES_SERIES_PATH || "series_features.jsonl";
+const LABELS_SERIES_PATH = process.env.LABELS_SERIES_PATH || "series_labels.jsonl";
 const DEFAULT_CHANNELS = [
   "ticker.BTC-PERPETUAL.raw",
   "ticker.ETH-PERPETUAL.raw",
@@ -36,6 +44,9 @@ const dataDir = path.join(process.cwd(), "data");
 const publicDir = path.join(process.cwd(), "public");
 const eventsPath = path.join(dataDir, "events.jsonl");
 const snapshotPath = path.join(dataDir, "snapshot.json");
+const deribitSeriesPath = path.join(dataDir, DERIBIT_SERIES_PATH);
+const featuresSeriesPath = path.join(dataDir, FEATURES_SERIES_PATH);
+const labelsSeriesPath = path.join(dataDir, LABELS_SERIES_PATH);
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -53,7 +64,9 @@ const state = {
   reconnectCount: 0,
   channels,
   latestByChannel: {},
-  events: []
+  events: [],
+  seriesByChannel: {},
+  latestSignalByChannel: {}
 };
 
 let ws = null;
@@ -108,6 +121,545 @@ function appendEvent(event) {
   });
 
   persistEventToDb(event);
+}
+
+function appendSeriesLine(filePath, record, label) {
+  fs.appendFile(filePath, `${JSON.stringify(record)}\n`, (error) => {
+    if (error) {
+      log(`Erreur ecriture ${label}`, error.message);
+    }
+  });
+}
+
+function ensureSeriesState(channel) {
+  if (!state.seriesByChannel[channel]) {
+    state.seriesByChannel[channel] = {
+      market: [],
+      features: [],
+      labels: [],
+      pending: []
+    };
+  }
+
+  return state.seriesByChannel[channel];
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function sigmoid(value) {
+  return 1 / (1 + Math.exp(-value));
+}
+
+function extractInstrument(channel) {
+  const parts = String(channel || "").split(".");
+  return parts.length >= 2 ? parts[1] : channel || "unknown";
+}
+
+function extractNumberFromData(data, key) {
+  if (!data || !key) {
+    return null;
+  }
+
+  const pathKeys = String(key).split(".");
+  let cursor = data;
+  for (const pathKey of pathKeys) {
+    if (!cursor || typeof cursor !== "object" || !Object.prototype.hasOwnProperty.call(cursor, pathKey)) {
+      return null;
+    }
+    cursor = cursor[pathKey];
+  }
+
+  const value = Number(cursor);
+  return Number.isFinite(value) ? value : null;
+}
+
+function extractMarketPoint(event) {
+  const data = event && event.data ? event.data : {};
+  const lastPrice = extractNumberFromData(data, "last_price")
+    ?? extractNumberFromData(data, "price")
+    ?? extractNumberFromData(data, "mark_price");
+
+  if (!Number.isFinite(lastPrice)) {
+    return null;
+  }
+
+  return {
+    type: "market_point",
+    ts: event.receivedAt,
+    channel: event.channel,
+    instrument: extractInstrument(event.channel),
+    lastPrice,
+    markPrice: extractNumberFromData(data, "mark_price"),
+    indexPrice: extractNumberFromData(data, "index_price"),
+    bestBid: extractNumberFromData(data, "best_bid_price"),
+    bestAsk: extractNumberFromData(data, "best_ask_price"),
+    openInterest: extractNumberFromData(data, "open_interest"),
+    volume24h: extractNumberFromData(data, "stats.volume"),
+    source: "deribit_ws"
+  };
+}
+
+function pickPrice(series, indexFromEnd) {
+  const idx = series.length - 1 - indexFromEnd;
+  if (idx < 0 || idx >= series.length) {
+    return null;
+  }
+
+  const point = series[idx];
+  return point && Number.isFinite(point.lastPrice) ? point.lastPrice : null;
+}
+
+function spreadBps(point) {
+  if (!point || !Number.isFinite(point.bestBid) || !Number.isFinite(point.bestAsk) || !Number.isFinite(point.lastPrice)) {
+    return null;
+  }
+
+  if (point.lastPrice === 0) {
+    return null;
+  }
+
+  return ((point.bestAsk - point.bestBid) / point.lastPrice) * 10000;
+}
+
+function buildFeaturePoint(channel, marketSeries) {
+  if (marketSeries.length < 2) {
+    return null;
+  }
+
+  const latest = marketSeries[marketSeries.length - 1];
+  const previous = marketSeries[marketSeries.length - 2];
+  const lastPrice = latest.lastPrice;
+  const prevPrice = previous.lastPrice;
+  if (!Number.isFinite(lastPrice) || !Number.isFinite(prevPrice) || prevPrice <= 0 || lastPrice <= 0) {
+    return null;
+  }
+
+  const fastRef = pickPrice(marketSeries, FEATURE_WINDOW_FAST);
+  const slowRef = pickPrice(marketSeries, FEATURE_WINDOW_SLOW);
+
+  const fastReturn = Number.isFinite(fastRef) && fastRef > 0 ? Math.log(lastPrice / fastRef) : null;
+  const slowReturn = Number.isFinite(slowRef) && slowRef > 0 ? Math.log(lastPrice / slowRef) : null;
+  const tickReturn = Math.log(lastPrice / prevPrice);
+
+  const pricesForSlow = marketSeries.slice(-FEATURE_WINDOW_SLOW).map((point) => point.lastPrice).filter((value) => Number.isFinite(value));
+  const meanPriceSlow = pricesForSlow.length > 0 ? computeMean(pricesForSlow) : null;
+  const stdPriceSlow = pricesForSlow.length > 1 ? computeStdDev(pricesForSlow) : null;
+  const zScore = Number.isFinite(meanPriceSlow) && Number.isFinite(stdPriceSlow) && stdPriceSlow > 0
+    ? (lastPrice - meanPriceSlow) / stdPriceSlow
+    : null;
+
+  const returnsSlow = [];
+  for (let index = 1; index < pricesForSlow.length; index += 1) {
+    const prev = pricesForSlow[index - 1];
+    const curr = pricesForSlow[index];
+    if (prev > 0 && curr > 0) {
+      returnsSlow.push(Math.log(curr / prev));
+    }
+  }
+
+  const realizedVol = returnsSlow.length > 1 ? computeStdDev(returnsSlow) : 0;
+  const spread = spreadBps(latest);
+  const oiPrev = previous.openInterest;
+  const oiNow = latest.openInterest;
+  const oiDelta = Number.isFinite(oiNow) && Number.isFinite(oiPrev) ? oiNow - oiPrev : null;
+
+  return {
+    type: "feature_point",
+    ts: latest.ts,
+    channel,
+    instrument: latest.instrument,
+    lastPrice,
+    tickReturn,
+    returnFast: fastReturn,
+    returnSlow: slowReturn,
+    zScore,
+    realizedVol,
+    spreadBps: spread,
+    oiDelta,
+    windows: {
+      fast: FEATURE_WINDOW_FAST,
+      slow: FEATURE_WINDOW_SLOW
+    }
+  };
+}
+
+function computeHitOutcome(pricePath, entryPrice, tpPct, slPct, side) {
+  if (!Array.isArray(pricePath) || pricePath.length === 0 || !Number.isFinite(entryPrice) || entryPrice <= 0) {
+    return "unknown";
+  }
+
+  for (const price of pricePath) {
+    if (!Number.isFinite(price) || price <= 0) {
+      continue;
+    }
+
+    const movePct = (price - entryPrice) / entryPrice;
+    if (side === "long") {
+      if (movePct >= tpPct) {
+        return "tp";
+      }
+      if (movePct <= -slPct) {
+        return "sl";
+      }
+    }
+
+    if (side === "short") {
+      if (movePct <= -tpPct) {
+        return "tp";
+      }
+      if (movePct >= slPct) {
+        return "sl";
+      }
+    }
+  }
+
+  return "timeout";
+}
+
+function buildLabelRecord(pendingFeature, marketSeries, horizonPoints, slPct, tpPct) {
+  const startIndex = pendingFeature.marketIndex;
+  const endIndex = startIndex + horizonPoints;
+  if (endIndex >= marketSeries.length) {
+    return null;
+  }
+
+  const entry = marketSeries[startIndex];
+  const futureWindow = marketSeries.slice(startIndex + 1, endIndex + 1);
+  const futurePrices = futureWindow.map((point) => point.lastPrice).filter((price) => Number.isFinite(price));
+  if (!entry || !Number.isFinite(entry.lastPrice) || futurePrices.length === 0) {
+    return null;
+  }
+
+  const lastFuturePrice = futurePrices[futurePrices.length - 1];
+  const realizedReturn = (lastFuturePrice - entry.lastPrice) / entry.lastPrice;
+
+  const longOutcome = computeHitOutcome(futurePrices, entry.lastPrice, tpPct, slPct, "long");
+  const shortOutcome = computeHitOutcome(futurePrices, entry.lastPrice, tpPct, slPct, "short");
+  const predictedDirection = pendingFeature.prediction && pendingFeature.prediction.direction
+    ? pendingFeature.prediction.direction
+    : "neutral";
+
+  let predictedSuccess = null;
+  if (predictedDirection === "long") {
+    predictedSuccess = longOutcome === "tp";
+  } else if (predictedDirection === "short") {
+    predictedSuccess = shortOutcome === "tp";
+  }
+
+  return {
+    type: "label_point",
+    ts: marketSeries[endIndex].ts,
+    channel: pendingFeature.channel,
+    instrument: pendingFeature.instrument,
+    featureTs: pendingFeature.ts,
+    horizonPoints,
+    entryPrice: entry.lastPrice,
+    closePrice: lastFuturePrice,
+    realizedReturn,
+    long: {
+      outcome: longOutcome,
+      success: longOutcome === "tp"
+    },
+    short: {
+      outcome: shortOutcome,
+      success: shortOutcome === "tp"
+    },
+    riskModel: {
+      slPct,
+      tpPct
+    },
+    prediction: {
+      model: pendingFeature.prediction && pendingFeature.prediction.model
+        ? pendingFeature.prediction.model
+        : "heuristic-v1",
+      direction: predictedDirection,
+      confidence: pendingFeature.prediction && Number.isFinite(pendingFeature.prediction.confidence)
+        ? pendingFeature.prediction.confidence
+        : null,
+      score: pendingFeature.prediction && pendingFeature.prediction.score
+        ? pendingFeature.prediction.score
+        : null,
+      success: predictedSuccess
+    }
+  };
+}
+
+function computeBacktestMetrics(labels) {
+  const directional = labels.filter((label) => {
+    const direction = label && label.prediction ? label.prediction.direction : "neutral";
+    return direction === "long" || direction === "short";
+  });
+
+  const decided = directional.filter((label) => {
+    const success = label && label.prediction ? label.prediction.success : null;
+    return typeof success === "boolean";
+  });
+  const wins = decided.filter((label) => label.prediction.success).length;
+  const accuracy = decided.length > 0 ? wins / decided.length : null;
+  const coverage = labels.length > 0 ? directional.length / labels.length : null;
+  const reliabilityScore = accuracy === null || coverage === null
+    ? null
+    : (accuracy * 0.7) + (coverage * 0.3);
+
+  return {
+    sample: {
+      labels: labels.length,
+      directional: directional.length,
+      decided: decided.length,
+      wins,
+      losses: decided.length - wins
+    },
+    metrics: {
+      accuracy,
+      coverage,
+      reliabilityScore
+    }
+  };
+}
+
+function buildBacktestRollingPayload(channel, limit, windows) {
+  const channels = channel ? [channel] : Object.keys(state.seriesByChannel);
+  const labels = channels
+    .flatMap((name) => (state.seriesByChannel[name] ? state.seriesByChannel[name].labels : []))
+    .slice(-limit);
+  const rollWindows = Math.max(1, Math.min(windows, 50));
+  const chunkSize = Math.max(1, Math.floor(limit / rollWindows));
+  const history = [];
+  for (let index = 0; index < rollWindows; index += 1) {
+    const end = labels.length - ((rollWindows - 1 - index) * chunkSize);
+    const start = Math.max(0, end - chunkSize);
+    const slice = labels.slice(start, Math.max(start, end));
+    if (slice.length === 0) {
+      continue;
+    }
+
+    const sliceStats = computeBacktestMetrics(slice);
+    history.push({
+      windowIndex: index,
+      fromTs: slice[0].ts,
+      toTs: slice[slice.length - 1].ts,
+      ...sliceStats
+    });
+  }
+
+  const summary = computeBacktestMetrics(labels);
+  const decided = summary.sample.decided;
+
+  return {
+    mode: "rolling",
+    channel: channel || "all",
+    requestedLabels: limit,
+    windows: {
+      requested: rollWindows,
+      chunkSize,
+      computed: history.length
+    },
+    sample: summary.sample,
+    metrics: summary.metrics,
+    history,
+    message: decided === 0
+      ? "Pas assez de labels décisionnels pour calculer une accuracy rolling"
+      : "Backtest rolling calculé sur labels récents"
+  };
+}
+
+function makeSignalFromFeature(feature) {
+  if (!feature) {
+    return null;
+  }
+
+  const mFast = Number.isFinite(feature.returnFast) ? feature.returnFast : 0;
+  const mSlow = Number.isFinite(feature.returnSlow) ? feature.returnSlow : 0;
+  const z = Number.isFinite(feature.zScore) ? feature.zScore : 0;
+  const vol = Number.isFinite(feature.realizedVol) ? feature.realizedVol : 0;
+  const spread = Number.isFinite(feature.spreadBps) ? feature.spreadBps : 0;
+  const oi = Number.isFinite(feature.oiDelta) ? feature.oiDelta : 0;
+
+  const trendCore = (mFast * 120) + (mSlow * 80);
+  const meanRevert = clamp(-z * 0.35, -1.2, 1.2);
+  const microPenalty = clamp((spread - 6) / 20, 0, 1.5);
+  const volPenalty = clamp((vol - 0.008) / 0.03, 0, 1.2);
+  const oiBoost = clamp(oi / 10000, -0.5, 0.5);
+
+  const rawLong = trendCore + meanRevert + oiBoost - microPenalty - volPenalty;
+  const rawShort = (-trendCore) - meanRevert - oiBoost - microPenalty - volPenalty;
+  const longProbability = sigmoid(rawLong);
+  const shortProbability = sigmoid(rawShort);
+
+  const bestSide = longProbability >= shortProbability ? "long" : "short";
+  const bestProbability = Math.max(longProbability, shortProbability);
+  const direction = bestProbability >= SIGNAL_MIN_PROBABILITY ? bestSide : "neutral";
+
+  const volForRisk = Math.max(vol, 0.0015);
+  const slPct = clamp(volForRisk * 2.2, 0.002, 0.03);
+  const tpPct = clamp(volForRisk * 3.4, slPct * 1.2, 0.05);
+  const entry = feature.lastPrice;
+
+  const slLong = entry * (1 - slPct);
+  const tpLong = entry * (1 + tpPct);
+  const slShort = entry * (1 + slPct);
+  const tpShort = entry * (1 - tpPct);
+
+  return {
+    ts: feature.ts,
+    channel: feature.channel,
+    instrument: feature.instrument,
+    model: "heuristic-v1",
+    direction,
+    score: {
+      long: longProbability,
+      short: shortProbability
+    },
+    confidence: Math.abs(longProbability - shortProbability),
+    risk: {
+      slPct,
+      tpPct,
+      long: {
+        entry,
+        stopLoss: slLong,
+        takeProfit: tpLong
+      },
+      short: {
+        entry,
+        stopLoss: slShort,
+        takeProfit: tpShort
+      }
+    },
+    factors: {
+      returnFast: feature.returnFast,
+      returnSlow: feature.returnSlow,
+      zScore: feature.zScore,
+      realizedVol: feature.realizedVol,
+      spreadBps: feature.spreadBps,
+      oiDelta: feature.oiDelta
+    }
+  };
+}
+
+function updateDerivedSeries(event) {
+  const marketPoint = extractMarketPoint(event);
+  if (!marketPoint) {
+    return;
+  }
+
+  const series = ensureSeriesState(event.channel);
+  series.market.push(marketPoint);
+  if (series.market.length > 1000) {
+    series.market.shift();
+  }
+  appendSeriesLine(deribitSeriesPath, marketPoint, DERIBIT_SERIES_PATH);
+
+  const featurePoint = buildFeaturePoint(event.channel, series.market);
+  if (!featurePoint) {
+    return;
+  }
+
+  series.features.push(featurePoint);
+  if (series.features.length > 1000) {
+    series.features.shift();
+  }
+  appendSeriesLine(featuresSeriesPath, featurePoint, FEATURES_SERIES_PATH);
+
+  const signal = makeSignalFromFeature(featurePoint);
+  if (signal) {
+    state.latestSignalByChannel[event.channel] = signal;
+  }
+
+  const pendingRecord = {
+    ...featurePoint,
+    marketIndex: series.market.length - 1,
+    prediction: signal
+      ? {
+        model: signal.model,
+        direction: signal.direction,
+        confidence: signal.confidence,
+        score: signal.score
+      }
+      : {
+        model: "heuristic-v1",
+        direction: "neutral",
+        confidence: null,
+        score: null
+      }
+  };
+  series.pending.push(pendingRecord);
+  if (series.pending.length > 2000) {
+    series.pending.shift();
+  }
+
+  while (series.pending.length > 0) {
+    const candidate = series.pending[0];
+    const signalForRisk = state.latestSignalByChannel[event.channel];
+    const risk = signalForRisk && signalForRisk.risk
+      ? signalForRisk.risk
+      : { slPct: 0.004, tpPct: 0.008 };
+
+    const label = buildLabelRecord(
+      candidate,
+      series.market,
+      SIGNAL_HORIZON_POINTS,
+      risk.slPct,
+      risk.tpPct
+    );
+
+    if (!label) {
+      break;
+    }
+
+    series.pending.shift();
+    series.labels.push(label);
+    if (series.labels.length > 1000) {
+      series.labels.shift();
+    }
+    appendSeriesLine(labelsSeriesPath, label, LABELS_SERIES_PATH);
+  }
+}
+
+function getSeriesSchema() {
+  return {
+    marketSeries: {
+      storage: DERIBIT_SERIES_PATH,
+      key: ["ts", "channel"],
+      fields: {
+        ts: "ISO timestamp",
+        channel: "Deribit channel",
+        instrument: "Instrument code",
+        lastPrice: "Number",
+        markPrice: "Number|null",
+        indexPrice: "Number|null",
+        bestBid: "Number|null",
+        bestAsk: "Number|null",
+        openInterest: "Number|null",
+        volume24h: "Number|null"
+      }
+    },
+    featureSeries: {
+      storage: FEATURES_SERIES_PATH,
+      key: ["ts", "channel"],
+      fields: {
+        tickReturn: "log return t vs t-1",
+        returnFast: `log return t vs t-${FEATURE_WINDOW_FAST}`,
+        returnSlow: `log return t vs t-${FEATURE_WINDOW_SLOW}`,
+        zScore: "z-score on slow window prices",
+        realizedVol: "std dev of log returns on slow window",
+        spreadBps: "(ask-bid)/price in bps",
+        oiDelta: "open interest delta"
+      }
+    },
+    labelSeries: {
+      storage: LABELS_SERIES_PATH,
+      key: ["featureTs", "channel"],
+      fields: {
+        horizonPoints: "future ticks horizon",
+        realizedReturn: "close(entry+h)-entry / entry",
+        long: "{ outcome: tp|sl|timeout, success: boolean }",
+        short: "{ outcome: tp|sl|timeout, success: boolean }",
+        riskModel: "{ slPct, tpPct }"
+      }
+    }
+  };
 }
 
 async function setupDatabase() {
@@ -258,7 +810,8 @@ function buildSnapshot() {
       channels: state.channels,
       eventsInMemory: state.events.length
     },
-    latestByChannel: state.latestByChannel
+    latestByChannel: state.latestByChannel,
+    latestSignalByChannel: state.latestSignalByChannel
   };
 }
 
@@ -287,7 +840,7 @@ function serveStaticAsset(res, urlPathname) {
   if (!assetPath) {
     sendJson(res, 404, {
       error: "Not Found",
-      message: "Use /health, /snapshot, /events, /candles, /analytics or /"
+      message: "Use /health, /snapshot, /events, /candles, /analytics, /signal, /features, /labels, /series/schema, /backtest/rolling or /"
     });
     return;
   }
@@ -297,7 +850,7 @@ function serveStaticAsset(res, urlPathname) {
       if (error.code === "ENOENT") {
         sendJson(res, 404, {
           error: "Not Found",
-          message: "Use /health, /snapshot, /events, /candles, /analytics or /"
+          message: "Use /health, /snapshot, /events, /candles, /analytics, /signal, /features, /labels, /series/schema, /backtest/rolling or /"
         });
         return;
       }
@@ -345,6 +898,25 @@ function parseLimit(rawValue, fallback, maxValue) {
   }
 
   return Math.max(1, Math.min(Math.floor(parsed), maxValue));
+}
+
+function buildSignalPayload(channel) {
+  const availableChannels = Object.keys(state.latestSignalByChannel);
+  const selected = channel || availableChannels[0] || null;
+  const signal = selected ? state.latestSignalByChannel[selected] : null;
+
+  if (!signal) {
+    return {
+      availableChannels,
+      signal: null,
+      message: "Signal indisponible (insufficient market/features data)"
+    };
+  }
+
+  return {
+    availableChannels,
+    signal
+  };
 }
 
 function extractPrice(event) {
@@ -451,12 +1023,12 @@ function buildAnalytics(channel, windowMs, topChannelsLimit) {
 }
 
 async function queryCandles(channel, limit) {
-  if (!dbEnabled || !dbReady || !dbPool) {
-    return { error: "database_unavailable", message: "Database is not enabled" };
-  }
-
   if (!timescaleEnabled || !timescaleReady) {
     return { error: "timescale_unavailable", message: "TimescaleDB is not enabled or ready" };
+  }
+
+  if (!dbEnabled || !dbReady || !dbPool) {
+    return { error: "database_unavailable", message: "Database is not enabled" };
   }
 
   const result = await dbPool.query(
@@ -568,9 +1140,62 @@ function startApiServer() {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/signal") {
+      const channel = (url.searchParams.get("channel") || "").trim();
+      sendJson(res, 200, buildSignalPayload(channel || null));
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/features") {
+      const channel = (url.searchParams.get("channel") || "").trim();
+      const limit = parseLimit(url.searchParams.get("limit") || 100, 100, 1000);
+      const channels = channel ? [channel] : Object.keys(state.seriesByChannel);
+      const features = channels
+        .flatMap((name) => (state.seriesByChannel[name] ? state.seriesByChannel[name].features : []))
+        .slice(-limit);
+
+      sendJson(res, 200, {
+        count: features.length,
+        features
+      });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/labels") {
+      const channel = (url.searchParams.get("channel") || "").trim();
+      const limit = parseLimit(url.searchParams.get("limit") || 100, 100, 1000);
+      const channels = channel ? [channel] : Object.keys(state.seriesByChannel);
+      const labels = channels
+        .flatMap((name) => (state.seriesByChannel[name] ? state.seriesByChannel[name].labels : []))
+        .slice(-limit);
+
+      sendJson(res, 200, {
+        count: labels.length,
+        labels
+      });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/series/schema") {
+      sendJson(res, 200, getSeriesSchema());
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/backtest/rolling") {
+      const channel = (url.searchParams.get("channel") || "").trim();
+      const labelsLimit = parseLimit(
+        url.searchParams.get("labels") || BACKTEST_DEFAULT_LABELS,
+        BACKTEST_DEFAULT_LABELS,
+        5000
+      );
+      const windows = parseLimit(url.searchParams.get("windows") || 10, 10, 50);
+      sendJson(res, 200, buildBacktestRollingPayload(channel || null, labelsLimit, windows));
+      return;
+    }
+
     sendJson(res, 404, {
       error: "Not Found",
-      message: "Use /health, /snapshot, /events, /candles or /analytics"
+      message: "Use /health, /snapshot, /events, /candles, /analytics, /signal, /features, /labels, /series/schema or /backtest/rolling"
     });
   });
 
@@ -649,6 +1274,7 @@ function handleNotification(message) {
   state.lastMessageAt = event.receivedAt;
   state.latestByChannel[event.channel] = event;
   appendEvent(event);
+  updateDerivedSeries(event);
   broadcastToLocalClients(event);
 }
 

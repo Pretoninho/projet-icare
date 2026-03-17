@@ -284,6 +284,48 @@ button:hover {
   background: linear-gradient(180deg, rgba(15, 24, 38, 0.85), rgba(8, 14, 24, 0.95));
 }
 
+.signal-panel {
+  border-color: rgba(245, 184, 77, 0.34);
+  background:
+    linear-gradient(135deg, rgba(33, 42, 56, 0.94), rgba(16, 24, 34, 0.9)),
+    radial-gradient(circle at 90% 20%, rgba(245, 184, 77, 0.12), transparent 45%);
+}
+
+.signal-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.signal-card {
+  margin: 0;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(245, 184, 77, 0.22);
+  background: rgba(15, 22, 32, 0.78);
+}
+
+.signal-card strong {
+  display: block;
+  font-size: 1.35rem;
+}
+
+.signal-card span {
+  display: block;
+  margin-top: 8px;
+  font-size: 0.85rem;
+}
+
+#signal-reliability-sparkline {
+  display: block;
+  width: 100%;
+  height: 56px;
+  margin-top: 8px;
+  border: 1px solid rgba(245, 184, 77, 0.22);
+  border-radius: 8px;
+  background: rgba(8, 14, 24, 0.72);
+}
+
 .two-column {
   display: grid;
   grid-template-columns: 1.15fr 0.85fr;
@@ -412,6 +454,7 @@ td {
 
 @media (max-width: 1024px) {
   .metrics-grid,
+  .signal-grid,
   .two-column,
   .controls-panel {
     grid-template-columns: 1fr 1fr;
@@ -431,6 +474,7 @@ td {
 
   .hero,
   .metrics-grid,
+  .signal-grid,
   .two-column,
   .controls-panel,
   .analytics-list {

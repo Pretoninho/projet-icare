@@ -122,41 +122,31 @@ DATABASE_URL=postgres://icare:icare@localhost:5432/icare TIMESCALE_ENABLED=true 
 - GET /analytics?channel=ticker.BTC-PERPETUAL.raw&windowMs=300000: stats prix et volatilité sur la fenêtre
 
 ## Interface web
-- URL: http://localhost:3000/
-- Vue statut de connexion Deribit + WebSocket local
-- Sélection du canal observé et de la fenêtre analytics
-- Courbe live basée sur les derniers ticks en mémoire
-- Tableau snapshot par canal
-- Flux des événements récents
-- Tableau de bougies OHLC si TimescaleDB est disponible
-
+- Pipeline de features/labels dérivés des ticks Deribit
+- Endpoint signal (direction, probabilité, SL/TP)
 ## Flux WebSocket local
 - URL: ws://localhost:3000/stream (selon API_PORT et LOCAL_WS_PATH)
-- Message initial: snapshot complet
-- Messages suivants: événements en direct
-
-## Persistance PostgreSQL
-Si DATABASE_URL est défini, l'application:
-- crée le schéma/table si nécessaire
-- insère chaque événement de canal dans une colonne JSONB
-
-Pour activer PostgreSQL, installer d'abord le driver:
-
-npm install pg
-
-Structure de table:
-- id BIGSERIAL PRIMARY KEY
-- received_at TIMESTAMPTZ
-- channel TEXT
-- payload JSONB
-
-## Mode TimescaleDB
+- FEATURE_WINDOW_FAST: fenêtre courte (ticks) pour features momentum (défaut: 5)
+- FEATURE_WINDOW_SLOW: fenêtre longue (ticks) pour features tendance/volatilité (défaut: 20)
+- SIGNAL_HORIZON_POINTS: horizon (ticks) pour génération des labels (défaut: 15)
+- SIGNAL_MIN_PROBABILITY: seuil minimum de décision long/short (défaut: 0.55)
+- DERIBIT_SERIES_PATH: fichier JSONL série marché dérivée (défaut: series_deribit.jsonl)
+- FEATURES_SERIES_PATH: fichier JSONL série features (défaut: series_features.jsonl)
+- LABELS_SERIES_PATH: fichier JSONL série labels (défaut: series_labels.jsonl)
 Avec TIMESCALE_ENABLED=true et une base compatible TimescaleDB:
-- la table brute est convertie en hypertable
-- une policy de rétention est appliquée
-- une vue continue OHLC est créée
-- l'endpoint /candles expose les bougies agrégées
-
+- GET /signal?channel=ticker.BTC-PERPETUAL.raw: signal directionnel + probabilité + niveaux SL/TP
+- GET /features?channel=ticker.BTC-PERPETUAL.raw&limit=200: derniers points de features calculés
+- GET /labels?channel=ticker.BTC-PERPETUAL.raw&limit=200: labels ex post (tp/sl/timeout)
+- GET /series/schema: schéma logique des séries market/features/labels
+- GET /backtest/rolling?channel=ticker.BTC-PERPETUAL.raw&labels=200&windows=10: accuracy rolling, score de fiabilité et historique pour sparkline
 Exemple:
+- data/series_deribit.jsonl: série normalisée Deribit (prix, mark, bid/ask, open interest)
+- data/series_features.jsonl: features calculées (retours, z-score, vol réalisée, spread)
+- data/series_labels.jsonl: labels horizon (succès long/short vs SL/TP)
 
-DATABASE_URL=postgres://user:pass@localhost:5432/icare TIMESCALE_ENABLED=true npm start
+## Pipeline features/labels
+1. Normalisation tick Deribit en point de marché (prix et microstructure)
+2. Calcul feature point par canal sur fenêtres fast/slow
+3. Génération du signal courant (long/short/neutral, probas, SL/TP)
+4. Labellisation différée après horizon de ticks (outcome tp/sl/timeout)
+5. Persistance JSONL des trois séries pour backtest et calibration

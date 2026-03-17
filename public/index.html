@@ -66,6 +66,40 @@
           </article>
         </section>
 
+        <section class="panel signal-panel" id="signal-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-label">Signal tactique</p>
+              <h2 id="signal-direction">En attente de données</h2>
+            </div>
+            <div class="legend-chip" id="signal-updated-at">--</div>
+          </div>
+          <div class="signal-grid">
+            <article class="signal-card">
+              <p class="metric-label">Probabilité Long</p>
+              <strong id="signal-prob-long">--</strong>
+            </article>
+            <article class="signal-card">
+              <p class="metric-label">Probabilité Short</p>
+              <strong id="signal-prob-short">--</strong>
+            </article>
+            <article class="signal-card">
+              <p class="metric-label">Stop Loss</p>
+              <strong id="signal-sl">--</strong>
+            </article>
+            <article class="signal-card">
+              <p class="metric-label">Take Profit</p>
+              <strong id="signal-tp">--</strong>
+            </article>
+            <article class="signal-card">
+              <p class="metric-label">Fiabilité rolling</p>
+              <strong id="signal-reliability">--</strong>
+              <span id="signal-sample" class="muted">--</span>
+              <canvas id="signal-reliability-sparkline" width="240" height="56" aria-label="Sparkline de fiabilité rolling"></canvas>
+            </article>
+          </div>
+        </section>
+
         <section class="panel chart-panel">
           <div class="panel-head">
             <div>

@@ -1,8 +1,10 @@
 const appState = {
   analytics: null,
+  backtest: null,
   candles: [],
   events: [],
   health: null,
+  signal: null,
   snapshot: null,
   wsConnected: false
 };
@@ -28,6 +30,15 @@ const refs = {
   metricStatus: document.getElementById("metric-status"),
   metricVolatility: document.getElementById("metric-volatility"),
   refreshButton: document.getElementById("refresh-button"),
+  signalDirection: document.getElementById("signal-direction"),
+  signalProbLong: document.getElementById("signal-prob-long"),
+  signalProbShort: document.getElementById("signal-prob-short"),
+  signalReliability: document.getElementById("signal-reliability"),
+  signalReliabilitySparkline: document.getElementById("signal-reliability-sparkline"),
+  signalSample: document.getElementById("signal-sample"),
+  signalSl: document.getElementById("signal-sl"),
+  signalTp: document.getElementById("signal-tp"),
+  signalUpdatedAt: document.getElementById("signal-updated-at"),
   snapshotGeneratedAt: document.getElementById("snapshot-generated-at"),
   snapshotTableBody: document.getElementById("snapshot-table-body"),
   topChannelList: document.getElementById("top-channel-list"),
@@ -88,6 +99,14 @@ function formatPercent(value) {
   return `${sign}${formatNumber(value, 3)} %`;
 }
 
+function formatProbability(value) {
+  if (value === null || typeof value === "undefined" || Number.isNaN(Number(value))) {
+    return "--";
+  }
+
+  return `${formatNumber(Number(value) * 100, 2)} %`;
+}
+
 function escapeHtml(value) {
   return String(value)
     .replace(/&/g, "&amp;")
@@ -95,6 +114,65 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/\"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function drawReliabilitySparkline(history) {
+  const canvas = refs.signalReliabilitySparkline;
+  if (!canvas) {
+    return;
+  }
+
+  const context = canvas.getContext("2d");
+  const width = canvas.width;
+  const height = canvas.height;
+  context.clearRect(0, 0, width, height);
+
+  const points = Array.isArray(history)
+    ? history
+      .map((item) => item && item.metrics ? item.metrics.reliabilityScore : null)
+      .filter((value) => Number.isFinite(value))
+    : [];
+
+  context.strokeStyle = "rgba(139, 154, 179, 0.35)";
+  context.lineWidth = 1;
+  context.beginPath();
+  context.moveTo(0, height - 1);
+  context.lineTo(width, height - 1);
+  context.stroke();
+
+  if (points.length < 2) {
+    context.fillStyle = "rgba(139, 154, 179, 0.9)";
+    context.font = "11px IBM Plex Mono";
+    context.fillText("rolling: n/a", 8, 20);
+    return;
+  }
+
+  const min = Math.min(...points);
+  const max = Math.max(...points);
+  const paddingX = 6;
+  const paddingY = 7;
+  const usableWidth = width - (paddingX * 2);
+  const usableHeight = height - (paddingY * 2);
+
+  const gradient = context.createLinearGradient(0, 0, width, 0);
+  gradient.addColorStop(0, "#ff6b6b");
+  gradient.addColorStop(0.5, "#f5b84d");
+  gradient.addColorStop(1, "#2ecc8f");
+  context.strokeStyle = gradient;
+  context.lineWidth = 2;
+  context.beginPath();
+
+  points.forEach((value, index) => {
+    const x = paddingX + (usableWidth * index) / Math.max(points.length - 1, 1);
+    const ratio = max === min ? 0.5 : (value - min) / (max - min);
+    const y = height - paddingY - (ratio * usableHeight);
+    if (index === 0) {
+      context.moveTo(x, y);
+    } else {
+      context.lineTo(x, y);
+    }
+  });
+  context.stroke();
 }
 
 async function fetchJson(url) {
@@ -222,6 +300,49 @@ function renderAnalytics() {
     .join("") || '<li class="muted">Aucune activité récente</li>';
 }
 
+function renderSignal() {
+  const payload = appState.signal;
+  const backtest = appState.backtest;
+  if (!payload || !payload.signal) {
+    refs.signalDirection.textContent = "Signal indisponible";
+    refs.signalProbLong.textContent = "--";
+    refs.signalProbShort.textContent = "--";
+    refs.signalSl.textContent = "--";
+    refs.signalTp.textContent = "--";
+    refs.signalReliability.textContent = "--";
+    refs.signalSample.textContent = "--";
+    refs.signalUpdatedAt.textContent = "En attente";
+    return;
+  }
+
+  const signal = payload.signal;
+  const direction = signal.direction || "neutral";
+  const isShort = direction === "short";
+  const riskBranch = isShort ? signal.risk.short : signal.risk.long;
+
+  refs.signalDirection.textContent = direction === "neutral"
+    ? "Neutral"
+    : (direction === "long" ? "Long" : "Short");
+  refs.signalProbLong.textContent = formatProbability(signal.score && signal.score.long);
+  refs.signalProbShort.textContent = formatProbability(signal.score && signal.score.short);
+  refs.signalSl.textContent = riskBranch ? formatNumber(riskBranch.stopLoss, 2) : "--";
+  refs.signalTp.textContent = riskBranch ? formatNumber(riskBranch.takeProfit, 2) : "--";
+
+  const reliability = backtest && backtest.metrics
+    ? backtest.metrics.reliabilityScore
+    : null;
+  const sample = backtest && backtest.sample
+    ? backtest.sample.decided
+    : null;
+  refs.signalReliability.textContent = formatProbability(reliability);
+  refs.signalSample.textContent = Number.isFinite(sample)
+    ? `Échantillon: ${sample}`
+    : "Échantillon: --";
+  drawReliabilitySparkline(backtest && Array.isArray(backtest.history) ? backtest.history : []);
+
+  refs.signalUpdatedAt.textContent = `Mis à jour: ${formatDate(signal.ts)}`;
+}
+
 function renderCandles() {
   if (!appState.candles || appState.candles.error) {
     refs.candlesState.textContent = appState.candles && appState.candles.message
@@ -321,6 +442,7 @@ function renderAll() {
   renderHealth();
   renderSnapshot();
   renderAnalytics();
+  renderSignal();
   renderEvents();
   renderCandles();
   renderChart();
@@ -353,6 +475,18 @@ async function loadAnalyticsAndCandles() {
       error: true,
       message: error.message
     };
+  }
+
+  try {
+    appState.signal = await fetchJson(`/signal?channel=${channel}`);
+  } catch (_error) {
+    appState.signal = null;
+  }
+
+  try {
+    appState.backtest = await fetchJson(`/backtest/rolling?channel=${channel}&labels=200&windows=10`);
+  } catch (_error) {
+    appState.backtest = null;
   }
 }
 
