@@ -1,0 +1,10 @@
+{
+  "name": "iCare Live Console",
+  "short_name": "iCare",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0f17",
+  "theme_color": "#0b0f17",
+  "lang": "fr",
+  "description": "Console live de supervision Deribit avec alertes et notifications push."
+}

@@ -9,7 +9,9 @@ const appState = {
     enabled: false,
     lastSentByKey: {},
     minProbability: 0.60,
-    permission: "default"
+    permission: "default",
+    pushSubscribed: false,
+    swRegistration: null
   },
   regimeQuality: null,
   signal: null,
@@ -172,6 +174,90 @@ function persistNotificationPreferences() {
   }
 }
 
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  const output = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; i += 1) {
+    output[i] = rawData.charCodeAt(i);
+  }
+  return output;
+}
+
+async function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) {
+    return null;
+  }
+
+  try {
+    const registration = await navigator.serviceWorker.register("/sw.js");
+    appState.notifications.swRegistration = registration;
+    return registration;
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function ensurePushSubscription() {
+  const registration = appState.notifications.swRegistration;
+  if (!registration || !("PushManager" in window)) {
+    appState.notifications.pushSubscribed = false;
+    return false;
+  }
+
+  try {
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+      const keyPayload = await fetchJson("/push/public-key");
+      const appServerKey = urlBase64ToUint8Array(keyPayload.publicKey);
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: appServerKey
+      });
+    }
+
+    await fetch("/push/subscribe", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ subscription })
+    });
+
+    appState.notifications.pushSubscribed = true;
+    return true;
+  } catch (_error) {
+    appState.notifications.pushSubscribed = false;
+    return false;
+  }
+}
+
+async function removePushSubscription() {
+  const registration = appState.notifications.swRegistration;
+  if (!registration || !("PushManager" in window)) {
+    appState.notifications.pushSubscribed = false;
+    return;
+  }
+
+  try {
+    const subscription = await registration.pushManager.getSubscription();
+    if (subscription) {
+      await fetch("/push/unsubscribe", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ endpoint: subscription.endpoint })
+      });
+      await subscription.unsubscribe();
+    }
+  } catch (_error) {
+  }
+
+  appState.notifications.pushSubscribed = false;
+}
+
 function updateNotificationStatus() {
   const notificationsAvailable = typeof window.Notification !== "undefined";
   appState.notifications.permission = notificationsAvailable ? Notification.permission : "unsupported";
@@ -184,7 +270,9 @@ function updateNotificationStatus() {
     return;
   }
 
-  if (permission === "granted") {
+  if (permission === "granted" && appState.notifications.pushSubscribed) {
+    refs.notificationStatus.textContent = "Actif push";
+  } else if (permission === "granted") {
     refs.notificationStatus.textContent = "Actif navigateur";
   } else if (permission === "unsupported") {
     refs.notificationStatus.textContent = "Actif in-app";
@@ -838,6 +926,7 @@ refs.notificationCooldown.addEventListener("change", () => {
 refs.notificationToggle.addEventListener("click", async () => {
   if (appState.notifications.enabled) {
     appState.notifications.enabled = false;
+    await removePushSubscription();
     persistNotificationPreferences();
     updateNotificationStatus();
     return;
@@ -851,15 +940,22 @@ refs.notificationToggle.addEventListener("click", async () => {
   }
 
   appState.notifications.enabled = true;
+  if (typeof window.Notification !== "undefined" && Notification.permission === "granted") {
+    await ensurePushSubscription();
+  }
   persistNotificationPreferences();
   updateNotificationStatus();
   pushNotificationLog("system", "Notifications activées");
 });
 
 window.addEventListener("load", async () => {
+  await registerServiceWorker();
   loadNotificationPreferences();
   refs.notificationThreshold.value = String(appState.notifications.minProbability);
   refs.notificationCooldown.value = String(appState.notifications.cooldownMs);
+  if (appState.notifications.enabled && typeof window.Notification !== "undefined" && Notification.permission === "granted") {
+    await ensurePushSubscription();
+  }
   updateNotificationStatus();
   await refreshDashboard();
   connectLocalWebSocket();

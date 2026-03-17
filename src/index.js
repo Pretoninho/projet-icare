@@ -40,6 +40,12 @@ const CALIBRATION_LOOKBACK_LABELS = Number(process.env.CALIBRATION_LOOKBACK_LABE
 const CALIBRATION_MIN_SAMPLES = Number(process.env.CALIBRATION_MIN_SAMPLES || 60);
 const REGIME_TREND_THRESHOLD = Number(process.env.REGIME_TREND_THRESHOLD || 0.0035);
 const REGIME_VOL_HIGH_THRESHOLD = Number(process.env.REGIME_VOL_HIGH_THRESHOLD || 0.01);
+const SERVER_NOTIFICATION_COOLDOWN_MS = Number(process.env.SERVER_NOTIFICATION_COOLDOWN_MS || 300000);
+const SERVER_NOTIFICATION_MIN_PROBABILITY = Number(process.env.SERVER_NOTIFICATION_MIN_PROBABILITY || 0.62);
+const WEB_PUSH_ENABLED = process.env.WEB_PUSH_ENABLED === "true";
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || "mailto:alerts@icare.local";
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || "";
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || "";
 const DERIBIT_SERIES_PATH = process.env.DERIBIT_SERIES_PATH || "series_deribit.jsonl";
 const FEATURES_SERIES_PATH = process.env.FEATURES_SERIES_PATH || "series_features.jsonl";
 const LABELS_SERIES_PATH = process.env.LABELS_SERIES_PATH || "series_labels.jsonl";
@@ -62,12 +68,14 @@ const deribitSeriesPath = path.join(dataDir, DERIBIT_SERIES_PATH);
 const featuresSeriesPath = path.join(dataDir, FEATURES_SERIES_PATH);
 const labelsSeriesPath = path.join(dataDir, LABELS_SERIES_PATH);
 const notificationsPath = path.join(dataDir, "notifications.jsonl");
+const pushSubscriptionsPath = path.join(dataDir, "push_subscriptions.json");
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".webmanifest": "application/manifest+json; charset=utf-8",
   ".svg": "image/svg+xml; charset=utf-8"
 };
 
@@ -81,7 +89,10 @@ const state = {
   latestByChannel: {},
   events: [],
   seriesByChannel: {},
-  latestSignalByChannel: {}
+  latestSignalByChannel: {},
+  serverNotificationRuntime: {
+    lastSentByKey: {}
+  }
 };
 
 let ws = null;
@@ -95,6 +106,9 @@ let dbReady = false;
 let DbPoolClass = null;
 let timescaleEnabled = false;
 let timescaleReady = false;
+let webPush = null;
+let pushEnabled = false;
+let pushSubscriptions = [];
 
 function sanitizeIdentifier(input, fallback) {
   const sanitized = String(input || "").replace(/[^a-zA-Z0-9_]/g, "");
@@ -152,6 +166,7 @@ function appendNotificationAudit(notification) {
     ...notification
   };
   appendSeriesLine(notificationsPath, record, "notifications.jsonl");
+  sendPushToSubscribers(record);
 }
 
 function readNotificationAudit(limit) {
@@ -210,6 +225,116 @@ function readJsonBody(req, maxBytes) {
     });
 
     req.on("error", (error) => reject(error));
+  });
+}
+
+function loadPushSubscriptions() {
+  try {
+    if (!fs.existsSync(pushSubscriptionsPath)) {
+      pushSubscriptions = [];
+      return;
+    }
+
+    const raw = fs.readFileSync(pushSubscriptionsPath, "utf8");
+    const parsed = JSON.parse(raw);
+    pushSubscriptions = Array.isArray(parsed) ? parsed.filter((item) => item && item.endpoint) : [];
+  } catch (error) {
+    pushSubscriptions = [];
+    log("Chargement des abonnements push en echec", error.message);
+  }
+}
+
+function savePushSubscriptions() {
+  try {
+    fs.writeFileSync(pushSubscriptionsPath, JSON.stringify(pushSubscriptions, null, 2), "utf8");
+  } catch (error) {
+    log("Sauvegarde des abonnements push en echec", error.message);
+  }
+}
+
+function setupWebPush() {
+  if (!WEB_PUSH_ENABLED) {
+    log("Web Push desactive (WEB_PUSH_ENABLED=false)");
+    return;
+  }
+
+  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
+    log("Web Push desactive (VAPID_PUBLIC_KEY ou VAPID_PRIVATE_KEY manquant)");
+    return;
+  }
+
+  try {
+    webPush = require("web-push");
+    webPush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+    loadPushSubscriptions();
+    pushEnabled = true;
+    log(`Web Push actif (${pushSubscriptions.length} abonnement(s))`);
+  } catch (error) {
+    pushEnabled = false;
+    log("Initialisation Web Push en echec", error.message);
+  }
+}
+
+function addPushSubscription(subscription) {
+  if (!subscription || typeof subscription !== "object" || !subscription.endpoint) {
+    return false;
+  }
+
+  const exists = pushSubscriptions.some((item) => item.endpoint === subscription.endpoint);
+  if (exists) {
+    return true;
+  }
+
+  pushSubscriptions.push(subscription);
+  savePushSubscriptions();
+  return true;
+}
+
+function removePushSubscription(endpoint) {
+  if (!endpoint) {
+    return false;
+  }
+
+  const initial = pushSubscriptions.length;
+  pushSubscriptions = pushSubscriptions.filter((item) => item.endpoint !== endpoint);
+  if (pushSubscriptions.length !== initial) {
+    savePushSubscriptions();
+    return true;
+  }
+
+  return false;
+}
+
+function sendPushToSubscribers(record) {
+  if (!pushEnabled || !webPush || pushSubscriptions.length === 0) {
+    return;
+  }
+
+  const payload = JSON.stringify({
+    ts: record.ts,
+    title: record.title || "Alerte iCare",
+    message: record.message || "Nouvelle alerte",
+    level: record.level || "info",
+    channel: record.channel || null,
+    source: record.source || "server"
+  });
+
+  const stale = [];
+  Promise.all(
+    pushSubscriptions.map((subscription) => webPush.sendNotification(subscription, payload)
+      .catch((error) => {
+        const code = Number(error && (error.statusCode || error.status));
+        if (code === 404 || code === 410) {
+          stale.push(subscription.endpoint);
+        }
+      }))
+  ).finally(() => {
+    if (stale.length === 0) {
+      return;
+    }
+
+    pushSubscriptions = pushSubscriptions.filter((item) => !stale.includes(item.endpoint));
+    savePushSubscriptions();
   });
 }
 
@@ -858,6 +983,100 @@ function buildBacktestRollingPayload(channel, limit, windows) {
   };
 }
 
+function canDispatchServerNotification(key) {
+  const now = Date.now();
+  const last = state.serverNotificationRuntime.lastSentByKey[key] || 0;
+  return (now - last) >= SERVER_NOTIFICATION_COOLDOWN_MS;
+}
+
+function dispatchServerNotification(level, key, title, message, channel, context) {
+  if (!canDispatchServerNotification(key)) {
+    return;
+  }
+
+  state.serverNotificationRuntime.lastSentByKey[key] = Date.now();
+  appendNotificationAudit({
+    channel,
+    level,
+    title,
+    message,
+    context: context || null,
+    source: "server-rule"
+  });
+}
+
+function evaluateServerNotificationRules() {
+  const channelsWithSignal = Object.keys(state.latestSignalByChannel);
+  for (const channel of channelsWithSignal) {
+    const payload = buildSignalPayload(channel);
+    const decision = payload && payload.decision ? payload.decision : null;
+    if (!decision) {
+      continue;
+    }
+
+    const probability = Number(decision.probability);
+    const confidence = String(decision.confidence || "").toLowerCase();
+    const direction = String(decision.signal || "neutral").toLowerCase();
+    const killSwitch = decision.killSwitch || {};
+
+    if ((direction === "long" || direction === "short")
+      && Number.isFinite(probability)
+      && probability >= SERVER_NOTIFICATION_MIN_PROBABILITY
+      && confidence !== "low"
+      && !killSwitch.spreadTooWide
+      && !killSwitch.volatilityTooHigh) {
+      dispatchServerNotification(
+        "signal",
+        `signal-${channel}-${direction}`,
+        "Signal tactique",
+        `${channel} ${direction.toUpperCase()} @ ${(probability * 100).toFixed(2)}%`,
+        channel,
+        {
+          confidence,
+          probability,
+          score: decision.score
+        }
+      );
+    }
+
+    if (killSwitch.spreadTooWide || killSwitch.volatilityTooHigh) {
+      const issues = [];
+      if (killSwitch.spreadTooWide) {
+        issues.push("spread_too_wide");
+      }
+      if (killSwitch.volatilityTooHigh) {
+        issues.push("volatility_too_high");
+      }
+
+      dispatchServerNotification(
+        "risk",
+        `killswitch-${channel}`,
+        "Kill-switch actif",
+        `${channel}: ${issues.join(",")}`,
+        channel,
+        { issues }
+      );
+    }
+
+    const regimeQuality = buildRegimeQualityPayload(channel, BACKTEST_DEFAULT_LABELS);
+    const acc = regimeQuality && regimeQuality.total ? Number(regimeQuality.total.accuracy) : null;
+    const sample = regimeQuality && regimeQuality.total ? Number(regimeQuality.total.sample) : null;
+    if (Number.isFinite(acc) && Number.isFinite(sample) && sample >= 30 && acc < 0.45) {
+      dispatchServerNotification(
+        "quality",
+        `regime-quality-${channel}`,
+        "Qualité modèle en baisse",
+        `${channel}: accuracy ${(acc * 100).toFixed(2)}% sur ${sample} labels`,
+        channel,
+        {
+          accuracy: acc,
+          sample
+        }
+      );
+    }
+  }
+}
+
 function makeSignalFromFeature(feature) {
   if (!feature) {
     return null;
@@ -1330,7 +1549,7 @@ function serveStaticAsset(res, urlPathname) {
   if (!assetPath) {
     sendJson(res, 404, {
       error: "Not Found",
-      message: "Use /health, /snapshot, /events, /candles, /analytics, /signal, /features, /labels, /series/schema, /backtest/rolling, /quality/regime, /notifications or /"
+      message: "Use /health, /snapshot, /events, /candles, /analytics, /signal, /features, /labels, /series/schema, /backtest/rolling, /quality/regime, /notifications, /push/status, /push/public-key, /push/subscribe or /push/unsubscribe"
     });
     return;
   }
@@ -1340,7 +1559,7 @@ function serveStaticAsset(res, urlPathname) {
       if (error.code === "ENOENT") {
         sendJson(res, 404, {
           error: "Not Found",
-          message: "Use /health, /snapshot, /events, /candles, /analytics, /signal, /features, /labels, /series/schema, /backtest/rolling, /quality/regime, /notifications or /"
+          message: "Use /health, /snapshot, /events, /candles, /analytics, /signal, /features, /labels, /series/schema, /backtest/rolling, /quality/regime, /notifications, /push/status, /push/public-key, /push/subscribe or /push/unsubscribe"
         });
         return;
       }
@@ -1599,8 +1818,14 @@ function startApiServer() {
   apiServer = http.createServer((req, res) => {
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
 
-    if (req.method === "GET" && (url.pathname === "/" || url.pathname.startsWith("/assets/"))) {
-      serveStaticAsset(res, url.pathname === "/" ? "/" : url.pathname.replace(/^\/assets\//, "/"));
+    if (
+      req.method === "GET"
+      && (url.pathname === "/" || url.pathname.startsWith("/assets/") || url.pathname === "/sw.js" || url.pathname === "/manifest.webmanifest")
+    ) {
+      serveStaticAsset(
+        res,
+        url.pathname === "/" ? "/" : (url.pathname.startsWith("/assets/") ? url.pathname.replace(/^\/assets\//, "/") : url.pathname)
+      );
       return;
     }
 
@@ -1783,9 +2008,77 @@ function startApiServer() {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/push/status") {
+      sendJson(res, 200, {
+        enabled: pushEnabled,
+        subscriptions: pushSubscriptions.length
+      });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/push/public-key") {
+      if (!pushEnabled || !VAPID_PUBLIC_KEY) {
+        sendJson(res, 503, {
+          error: "push_unavailable",
+          message: "Web Push is not configured"
+        });
+        return;
+      }
+
+      sendJson(res, 200, {
+        publicKey: VAPID_PUBLIC_KEY
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/push/subscribe") {
+      readJsonBody(req, 1024 * 64)
+        .then((payload) => {
+          const ok = addPushSubscription(payload && payload.subscription ? payload.subscription : payload);
+          if (!ok) {
+            sendJson(res, 400, {
+              error: "invalid_subscription",
+              message: "Missing subscription endpoint"
+            });
+            return;
+          }
+
+          sendJson(res, 201, {
+            ok: true,
+            subscriptions: pushSubscriptions.length
+          });
+        })
+        .catch((error) => {
+          sendJson(res, 400, {
+            error: "invalid_json",
+            message: error.message
+          });
+        });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/push/unsubscribe") {
+      readJsonBody(req, 1024 * 64)
+        .then((payload) => {
+          const endpoint = payload && payload.endpoint ? payload.endpoint : null;
+          const removed = removePushSubscription(endpoint);
+          sendJson(res, 200, {
+            ok: removed,
+            subscriptions: pushSubscriptions.length
+          });
+        })
+        .catch((error) => {
+          sendJson(res, 400, {
+            error: "invalid_json",
+            message: error.message
+          });
+        });
+      return;
+    }
+
     sendJson(res, 404, {
       error: "Not Found",
-      message: "Use /health, /snapshot, /events, /candles, /analytics, /signal, /features, /labels, /series/schema, /backtest/rolling, /quality/regime or /notifications"
+      message: "Use /health, /snapshot, /events, /candles, /analytics, /signal, /features, /labels, /series/schema, /backtest/rolling, /quality/regime, /notifications, /push/status, /push/public-key, /push/subscribe or /push/unsubscribe"
     });
   });
 
@@ -1924,7 +2217,16 @@ function connect() {
 
 setInterval(writeSnapshot, SNAPSHOT_INTERVAL_MS);
 
+setInterval(() => {
+  try {
+    evaluateServerNotificationRules();
+  } catch (error) {
+    log("Evaluation notifications serveur en echec", error.message);
+  }
+}, 10000);
+
 setupDatabase().finally(() => {
+  setupWebPush();
   startApiServer();
   connect();
 });

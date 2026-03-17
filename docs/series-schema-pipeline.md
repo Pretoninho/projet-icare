@@ -85,11 +85,16 @@
 - `GET /quality/regime?channel=...&labels=...`: qualité par régime trend/range et vol low/high
 - `GET /notifications?limit=...`: audit des notifications persisté côté serveur
 - `POST /notifications`: append d'une notification dans `data/notifications.jsonl`
+- `GET /push/status`: état Web Push serveur
+- `GET /push/public-key`: clé publique VAPID
+- `POST /push/subscribe`: enregistrement abonnement push
+- `POST /push/unsubscribe`: désenregistrement abonnement push
 
 ## Notes d'exploitation
 - Le signal est heuristique (`model: heuristic-v1`) et doit être calibré avec historique plus long.
 - Les labels permettent ensuite un apprentissage supervisé (calibration des probabilités).
 - Calibration probabiliste active via `CALIBRATOR_METHOD=platt|isotonic`.
+- Audit notifications persistant via `data/notifications.jsonl` et abonnements push via `data/push_subscriptions.json`.
 
 ## Cadre d'intégration étendu (Deribit + features)
 

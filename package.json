@@ -23,6 +23,7 @@
 	"author": "Pretoninho",
 	"license": "ISC",
 	"dependencies": {
+		"web-push": "^3.6.7",
 		"ws": "^8.18.3"
 	}
 }

@@ -112,6 +112,12 @@ Démarrage complet en local:
 - CALIBRATION_MIN_SAMPLES: minimum labels décisionnels pour calibrer (défaut: 60)
 - REGIME_TREND_THRESHOLD: seuil trend/range pour qualité par régime (défaut: 0.0035)
 - REGIME_VOL_HIGH_THRESHOLD: seuil vol high/low pour qualité par régime (défaut: 0.01)
+- WEB_PUSH_ENABLED: active les notifications Web Push serveur (true/false, défaut: false)
+- VAPID_SUBJECT: contact VAPID (défaut: mailto:alerts@icare.local)
+- VAPID_PUBLIC_KEY: clé publique VAPID pour abonnement navigateur
+- VAPID_PRIVATE_KEY: clé privée VAPID pour envoi push
+- SERVER_NOTIFICATION_COOLDOWN_MS: anti-spam serveur par type de notification (défaut: 300000)
+- SERVER_NOTIFICATION_MIN_PROBABILITY: seuil minimal serveur pour alerte signal (défaut: 0.62)
 
 ## Exemple de lancement personnalisé
 DERIBIT_CHANNELS=ticker.BTC-PERPETUAL.100ms,ticker.ETH-PERPETUAL.100ms,ticker.SOL-PERPETUAL.100ms,deribit_price_index.btc_usd,deribit_price_index.eth_usd,deribit_price_index.sol_usd SNAPSHOT_INTERVAL_MS=10000 npm start
@@ -156,10 +162,16 @@ Avec TIMESCALE_ENABLED=true et une base compatible TimescaleDB:
 - GET /quality/regime?channel=ticker.BTC-PERPETUAL.raw&labels=300: qualité du modèle par régime (trend/range x vol)
 - GET /notifications?limit=200: historique serveur des alertes (JSONL)
 - POST /notifications: journalise une alerte côté serveur pour audit persistant
+- GET /push/status: état du module Web Push et nombre d'abonnements
+- GET /push/public-key: clé publique VAPID pour abonnement client
+- POST /push/subscribe: enregistre un abonnement Push API
+- POST /push/unsubscribe: retire un abonnement Push API
 Exemple:
 - data/series_deribit.jsonl: série normalisée Deribit (prix, mark, bid/ask, open interest)
 - data/series_features.jsonl: features calculées (retours, z-score, vol réalisée, spread)
 - data/series_labels.jsonl: labels horizon (succès long/short vs SL/TP)
+- data/notifications.jsonl: audit append-only des alertes
+- data/push_subscriptions.json: abonnements push persistés
 
 ## Pipeline features/labels
 1. Normalisation tick Deribit en point de marché (prix et microstructure)
