@@ -69,3 +69,91 @@
 ## Notes d'exploitation
 - Le signal est heuristique (`model: heuristic-v1`) et doit être calibré avec historique plus long.
 - Les labels permettent ensuite un apprentissage supervisé (calibration des probabilités).
+
+## Cadre d'intégration étendu (Deribit + features)
+
+### 1) Données minimales indispensables
+- OHLCV multi-timeframes (1m, 5m, 15m, 1h, 4h) sur perp/futures
+- Order book L2: profondeur bid/ask, spread, imbalance
+- Trades tick-by-tick: agressions acheteur/vendeur, volume delta
+- Open Interest + variation OI
+- Funding rate (actuel + historique)
+- Basis futures vs spot/index
+- Index price + mark price + last price
+- Volatilité implicite options (ATM IV, skew, term structure)
+- Liquidations (si flux disponible)
+- Calendrier macro/événements en binaire (CPI/FOMC)
+
+### 2) Données edge Deribit
+- Surface IV complète (strikes + maturités)
+- Skew 25-delta (RR/BF)
+- OI options par strike (zones d'attraction)
+- Put/Call ratio volume + OI
+- Greeks agrégés (gamma proxy)
+- Flux block trades options
+- Term structure perp/futures
+
+### 3) Features cibles
+- Momentum: returns, RSI, MACD, breakout
+- Microstructure: imbalance, queue pressure, spread regime
+- Flow: CVD, buy/sell aggressor ratio
+- Regime: vol réalisée, trend/range classifier
+- Derivatives: funding z-score, OI acceleration, basis dislocation
+- Options: IV rank, skew regime, smile steepness
+- Risk: drawdown récent, proxy VaR intraday
+
+### 4) Labels ML
+- Horizon strict: 15m, 1h, 4h (selon stratégie)
+- Direction: sign(return_{t+h}) ou triple barrier
+- Triple barrier:
+  - TP avant SL: succès
+  - SL avant TP: échec
+  - timeout: neutre
+- Probabilité: calibration de P(TP avant SL | features_t)
+
+### 5) SL/TP data-driven
+- SL: k * ATR ou quantile de mouvement adverse
+- TP: distribution historique des mouvements favorables
+- R:R dynamique selon régime (trend/range)
+- Sizing fixe (0.5%-1% capital)
+- Kill-switch: spread, latence, news
+
+### 6) Scoring agrégé (implémenté v1)
+Formule actuelle:
+
+$$
+Score = 0.25\,S_{trend} + 0.25\,S_{flow} + 0.20\,S_{deriv} + 0.20\,S_{options} - 0.10\,S_{risk}
+$$
+
+Mapping:
+- Score > 65: biais Long
+- Score < 35: biais Short
+- Sinon: Neutral
+
+Sortie `/signal` inclut:
+- direction, probabilité calibrée, entrée, SL, TP1/TP2
+- confiance (low/medium/high)
+- 3 raisons clés
+- état kill-switch
+
+### 7) Historique requis
+- Minimum viable: 3-6 mois 1m
+- Correct: 12-18 mois
+- Idéal: 24-36 mois
+- Alignement temporel funding/OI/options obligatoire
+
+### 8) Validation
+- Walk-forward (pas de split aléatoire)
+- Coûts réels: fees + slippage + latence
+- Analyse par régime de volatilité
+- Calibration probabiliste: Brier + reliability curve
+- Paper trading live avant réel
+
+### 9) Conclusion UI par instrument
+- Signal: Long/Short/Neutral
+- Probabilité (%)
+- Entrée
+- SL (+ distance %)
+- TP1/TP2 (+ distances %)
+- Confiance
+- 3 raisons clés

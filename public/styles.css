@@ -326,6 +326,16 @@ button:hover {
   background: rgba(8, 14, 24, 0.72);
 }
 
+.signal-meta {
+  margin-top: 12px;
+  display: grid;
+  gap: 6px;
+}
+
+.signal-meta p {
+  margin: 0;
+}
+
 .two-column {
   display: grid;
   grid-template-columns: 1.15fr 0.85fr;

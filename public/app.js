@@ -33,6 +33,8 @@ const refs = {
   signalDirection: document.getElementById("signal-direction"),
   signalProbLong: document.getElementById("signal-prob-long"),
   signalProbShort: document.getElementById("signal-prob-short"),
+  signalConfidence: document.getElementById("signal-confidence"),
+  signalReasons: document.getElementById("signal-reasons"),
   signalReliability: document.getElementById("signal-reliability"),
   signalReliabilitySparkline: document.getElementById("signal-reliability-sparkline"),
   signalSample: document.getElementById("signal-sample"),
@@ -309,14 +311,18 @@ function renderSignal() {
     refs.signalProbShort.textContent = "--";
     refs.signalSl.textContent = "--";
     refs.signalTp.textContent = "--";
+    refs.signalConfidence.textContent = "Confiance: --";
+    refs.signalReasons.textContent = "Raisons: --";
     refs.signalReliability.textContent = "--";
     refs.signalSample.textContent = "--";
     refs.signalUpdatedAt.textContent = "En attente";
+    drawReliabilitySparkline([]);
     return;
   }
 
   const signal = payload.signal;
-  const direction = signal.direction || "neutral";
+  const decision = payload.decision || {};
+  const direction = decision.signal || signal.direction || "neutral";
   const isShort = direction === "short";
   const riskBranch = isShort ? signal.risk.short : signal.risk.long;
 
@@ -325,8 +331,21 @@ function renderSignal() {
     : (direction === "long" ? "Long" : "Short");
   refs.signalProbLong.textContent = formatProbability(signal.score && signal.score.long);
   refs.signalProbShort.textContent = formatProbability(signal.score && signal.score.short);
-  refs.signalSl.textContent = riskBranch ? formatNumber(riskBranch.stopLoss, 2) : "--";
-  refs.signalTp.textContent = riskBranch ? formatNumber(riskBranch.takeProfit, 2) : "--";
+  refs.signalSl.textContent = Number.isFinite(decision.stopLoss)
+    ? formatNumber(decision.stopLoss, 2)
+    : (riskBranch ? formatNumber(riskBranch.stopLoss, 2) : "--");
+  const tp1 = Number.isFinite(decision.takeProfit1)
+    ? formatNumber(decision.takeProfit1, 2)
+    : (riskBranch && Number.isFinite(riskBranch.takeProfit1) ? formatNumber(riskBranch.takeProfit1, 2) : "--");
+  const tp2 = Number.isFinite(decision.takeProfit2)
+    ? formatNumber(decision.takeProfit2, 2)
+    : (riskBranch ? formatNumber(riskBranch.takeProfit, 2) : "--");
+  refs.signalTp.textContent = `${tp1} / ${tp2}`;
+  refs.signalConfidence.textContent = `Confiance: ${escapeHtml(String(decision.confidence || signal.confidenceBand || "low")).toUpperCase()}`;
+  const reasons = Array.isArray(decision.reasons) ? decision.reasons : [];
+  refs.signalReasons.textContent = reasons.length > 0
+    ? `Raisons: ${reasons.join(" | ")}`
+    : "Raisons: --";
 
   const reliability = backtest && backtest.metrics
     ? backtest.metrics.reliabilityScore

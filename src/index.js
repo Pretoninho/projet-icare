@@ -26,6 +26,15 @@ const FEATURE_WINDOW_SLOW = Number(process.env.FEATURE_WINDOW_SLOW || 20);
 const SIGNAL_HORIZON_POINTS = Number(process.env.SIGNAL_HORIZON_POINTS || 15);
 const SIGNAL_MIN_PROBABILITY = Number(process.env.SIGNAL_MIN_PROBABILITY || 0.55);
 const BACKTEST_DEFAULT_LABELS = Number(process.env.BACKTEST_DEFAULT_LABELS || 200);
+const SCORE_LONG_THRESHOLD = Number(process.env.SCORE_LONG_THRESHOLD || 65);
+const SCORE_SHORT_THRESHOLD = Number(process.env.SCORE_SHORT_THRESHOLD || 35);
+const SCORE_WEIGHT_TREND = Number(process.env.SCORE_WEIGHT_TREND || 0.25);
+const SCORE_WEIGHT_FLOW = Number(process.env.SCORE_WEIGHT_FLOW || 0.25);
+const SCORE_WEIGHT_DERIV = Number(process.env.SCORE_WEIGHT_DERIV || 0.20);
+const SCORE_WEIGHT_OPTIONS = Number(process.env.SCORE_WEIGHT_OPTIONS || 0.20);
+const SCORE_WEIGHT_RISK = Number(process.env.SCORE_WEIGHT_RISK || 0.10);
+const KILL_SWITCH_MAX_SPREAD_BPS = Number(process.env.KILL_SWITCH_MAX_SPREAD_BPS || 24);
+const KILL_SWITCH_MAX_REALIZED_VOL = Number(process.env.KILL_SWITCH_MAX_REALIZED_VOL || 0.03);
 const DERIBIT_SERIES_PATH = process.env.DERIBIT_SERIES_PATH || "series_deribit.jsonl";
 const FEATURES_SERIES_PATH = process.env.FEATURES_SERIES_PATH || "series_features.jsonl";
 const LABELS_SERIES_PATH = process.env.LABELS_SERIES_PATH || "series_labels.jsonl";
@@ -150,6 +159,24 @@ function clamp(value, min, max) {
 
 function sigmoid(value) {
   return 1 / (1 + Math.exp(-value));
+}
+
+function unitToScore(unit) {
+  return clamp(unit * 100, 0, 100);
+}
+
+function scoreToUnit(score) {
+  return clamp(score / 100, 0, 1);
+}
+
+function formatSigned(value, digits) {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+
+  const rounded = Number(value.toFixed(digits));
+  const sign = rounded > 0 ? "+" : "";
+  return `${sign}${rounded}`;
 }
 
 function extractInstrument(channel) {
@@ -477,30 +504,91 @@ function makeSignalFromFeature(feature) {
   const spread = Number.isFinite(feature.spreadBps) ? feature.spreadBps : 0;
   const oi = Number.isFinite(feature.oiDelta) ? feature.oiDelta : 0;
 
-  const trendCore = (mFast * 120) + (mSlow * 80);
-  const meanRevert = clamp(-z * 0.35, -1.2, 1.2);
-  const microPenalty = clamp((spread - 6) / 20, 0, 1.5);
-  const volPenalty = clamp((vol - 0.008) / 0.03, 0, 1.2);
-  const oiBoost = clamp(oi / 10000, -0.5, 0.5);
+  const spreadPenalty = Number.isFinite(spread) ? clamp((spread - 6) / 20, 0, 1.6) : 0.5;
+  const volPenalty = clamp((vol - 0.008) / 0.03, 0, 1.4);
 
-  const rawLong = trendCore + meanRevert + oiBoost - microPenalty - volPenalty;
-  const rawShort = (-trendCore) - meanRevert - oiBoost - microPenalty - volPenalty;
-  const longProbability = sigmoid(rawLong);
-  const shortProbability = sigmoid(rawShort);
+  const trendUnit = sigmoid((mFast * 170) + (mSlow * 120) - (z * 0.28));
+  const flowUnit = sigmoid((Number.isFinite(feature.tickReturn) ? feature.tickReturn * 220 : 0) - spreadPenalty);
+  const derivUnit = sigmoid((oi / 9000) + (mSlow * 45));
+  const optionsUnit = 0.5;
+  const riskUnit = clamp((volPenalty * 0.7) + (spreadPenalty * 0.3), 0, 1);
 
-  const bestSide = longProbability >= shortProbability ? "long" : "short";
-  const bestProbability = Math.max(longProbability, shortProbability);
-  const direction = bestProbability >= SIGNAL_MIN_PROBABILITY ? bestSide : "neutral";
+  const sTrend = unitToScore(trendUnit);
+  const sFlow = unitToScore(flowUnit);
+  const sDeriv = unitToScore(derivUnit);
+  const sOptions = unitToScore(optionsUnit);
+  const sRisk = unitToScore(riskUnit);
+
+  let compositeScore = (SCORE_WEIGHT_TREND * sTrend)
+    + (SCORE_WEIGHT_FLOW * sFlow)
+    + (SCORE_WEIGHT_DERIV * sDeriv)
+    + (SCORE_WEIGHT_OPTIONS * sOptions)
+    - (SCORE_WEIGHT_RISK * sRisk);
+  compositeScore = clamp(compositeScore, 0, 100);
+
+  let direction = "neutral";
+  if (compositeScore > SCORE_LONG_THRESHOLD) {
+    direction = "long";
+  } else if (compositeScore < SCORE_SHORT_THRESHOLD) {
+    direction = "short";
+  }
+
+  const longProbability = sigmoid((compositeScore - 50) / 8);
+  const shortProbability = 1 - longProbability;
 
   const volForRisk = Math.max(vol, 0.0015);
   const slPct = clamp(volForRisk * 2.2, 0.002, 0.03);
   const tpPct = clamp(volForRisk * 3.4, slPct * 1.2, 0.05);
+  const tp1Pct = clamp(tpPct * 0.55, slPct * 0.9, tpPct);
   const entry = feature.lastPrice;
 
   const slLong = entry * (1 - slPct);
+  const tp1Long = entry * (1 + tp1Pct);
   const tpLong = entry * (1 + tpPct);
   const slShort = entry * (1 + slPct);
+  const tp1Short = entry * (1 - tp1Pct);
   const tpShort = entry * (1 - tpPct);
+
+  const killSwitch = {
+    spreadTooWide: Number.isFinite(spread) && spread > KILL_SWITCH_MAX_SPREAD_BPS,
+    volatilityTooHigh: Number.isFinite(vol) && vol > KILL_SWITCH_MAX_REALIZED_VOL,
+    lowDataQuality: !Number.isFinite(feature.returnFast) || !Number.isFinite(feature.returnSlow)
+  };
+
+  const killSwitchTriggered = killSwitch.spreadTooWide || killSwitch.volatilityTooHigh;
+  if (killSwitchTriggered) {
+    direction = "neutral";
+  }
+
+  const confidenceDistance = Math.abs(compositeScore - 50);
+  const confidenceBand = confidenceDistance >= 20 ? "high" : (confidenceDistance >= 10 ? "medium" : "low");
+
+  const reasons = [];
+  if (direction === "long") {
+    reasons.push("Momentum haussier multi-fenêtres");
+  }
+  if (direction === "short") {
+    reasons.push("Momentum baissier multi-fenêtres");
+  }
+  if (sFlow >= 58) {
+    reasons.push("Microstructure favorable (spread/flux)");
+  } else if (sFlow <= 42) {
+    reasons.push("Microstructure défavorable (spread/flux)");
+  }
+  if (sDeriv >= 56) {
+    reasons.push("Dérivés en soutien (OI/basis proxy)");
+  } else if (sDeriv <= 44) {
+    reasons.push("Dérivés prudents (OI/basis proxy)");
+  }
+  if (killSwitch.spreadTooWide) {
+    reasons.push(`Kill-switch spread (${formatSigned(spread, 2)} bps)`);
+  }
+  if (killSwitch.volatilityTooHigh) {
+    reasons.push(`Kill-switch volatilité (${formatSigned(vol, 4)})`);
+  }
+  if (reasons.length === 0) {
+    reasons.push("Structure mixte: attendre une meilleure asymétrie");
+  }
 
   return {
     ts: feature.ts,
@@ -513,20 +601,42 @@ function makeSignalFromFeature(feature) {
       short: shortProbability
     },
     confidence: Math.abs(longProbability - shortProbability),
+    confidenceBand,
+    compositeScore,
+    componentScores: {
+      trend: sTrend,
+      flow: sFlow,
+      deriv: sDeriv,
+      options: sOptions,
+      risk: sRisk
+    },
+    scoreFormula: {
+      trend: SCORE_WEIGHT_TREND,
+      flow: SCORE_WEIGHT_FLOW,
+      deriv: SCORE_WEIGHT_DERIV,
+      options: SCORE_WEIGHT_OPTIONS,
+      riskPenalty: SCORE_WEIGHT_RISK,
+      longThreshold: SCORE_LONG_THRESHOLD,
+      shortThreshold: SCORE_SHORT_THRESHOLD
+    },
     risk: {
       slPct,
+      tp1Pct,
       tpPct,
       long: {
         entry,
         stopLoss: slLong,
+        takeProfit1: tp1Long,
         takeProfit: tpLong
       },
       short: {
         entry,
         stopLoss: slShort,
+        takeProfit1: tp1Short,
         takeProfit: tpShort
       }
     },
+    killSwitch,
     factors: {
       returnFast: feature.returnFast,
       returnSlow: feature.returnSlow,
@@ -534,7 +644,8 @@ function makeSignalFromFeature(feature) {
       realizedVol: feature.realizedVol,
       spreadBps: feature.spreadBps,
       oiDelta: feature.oiDelta
-    }
+    },
+    reasons: reasons.slice(0, 3)
   };
 }
 
@@ -913,9 +1024,34 @@ function buildSignalPayload(channel) {
     };
   }
 
+  const rolling = buildBacktestRollingPayload(selected, BACKTEST_DEFAULT_LABELS, 10);
+  const reliability = rolling && rolling.metrics ? rolling.metrics.reliabilityScore : null;
+  const rawDirectionalProbability = signal.direction === "long"
+    ? signal.score.long
+    : (signal.direction === "short" ? signal.score.short : 0.5);
+  const calibratedDirectionalProbability = Number.isFinite(reliability)
+    ? clamp((rawDirectionalProbability * 0.65) + (reliability * 0.35), 0, 1)
+    : rawDirectionalProbability;
+
+  const riskView = signal.direction === "short" ? signal.risk.short : signal.risk.long;
+  const decision = {
+    signal: signal.direction,
+    probability: calibratedDirectionalProbability,
+    entry: riskView ? riskView.entry : null,
+    stopLoss: riskView ? riskView.stopLoss : null,
+    takeProfit1: riskView ? riskView.takeProfit1 : null,
+    takeProfit2: riskView ? riskView.takeProfit : null,
+    confidence: signal.confidenceBand,
+    score: signal.compositeScore,
+    reasons: Array.isArray(signal.reasons) ? signal.reasons.slice(0, 3) : [],
+    killSwitch: signal.killSwitch
+  };
+
   return {
     availableChannels,
-    signal
+    signal,
+    decision,
+    reliability: rolling ? rolling.metrics : null
   };
 }
 

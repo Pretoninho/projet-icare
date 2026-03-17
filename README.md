@@ -98,6 +98,15 @@ Démarrage complet en local:
 - TS_AGG_POLICY_END_OFFSET: décalage fin pour policy agrégat (défaut: 1 minute)
 - TS_AGG_POLICY_SCHEDULE: fréquence policy agrégat (défaut: 1 minute)
 - ANALYTICS_DEFAULT_WINDOW_MS: fenêtre par défaut pour /analytics (défaut: 300000)
+- SCORE_LONG_THRESHOLD: seuil score pour biais long (défaut: 65)
+- SCORE_SHORT_THRESHOLD: seuil score pour biais short (défaut: 35)
+- SCORE_WEIGHT_TREND: poids composante trend (défaut: 0.25)
+- SCORE_WEIGHT_FLOW: poids composante flow (défaut: 0.25)
+- SCORE_WEIGHT_DERIV: poids composante dérivés (défaut: 0.20)
+- SCORE_WEIGHT_OPTIONS: poids composante options (défaut: 0.20)
+- SCORE_WEIGHT_RISK: poids pénalité risque (défaut: 0.10)
+- KILL_SWITCH_MAX_SPREAD_BPS: spread max avant neutralisation (défaut: 24)
+- KILL_SWITCH_MAX_REALIZED_VOL: vol max avant neutralisation (défaut: 0.03)
 
 ## Exemple de lancement personnalisé
 DERIBIT_CHANNELS=ticker.BTC-PERPETUAL.100ms,ticker.ETH-PERPETUAL.100ms,ticker.SOL-PERPETUAL.100ms,deribit_price_index.btc_usd,deribit_price_index.eth_usd,deribit_price_index.sol_usd SNAPSHOT_INTERVAL_MS=10000 npm start
