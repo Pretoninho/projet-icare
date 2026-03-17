@@ -1,0 +1,38 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: icare-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    volumes:
+      - app_data:/app/data
+
+  timescaledb:
+    image: timescale/timescaledb:2.17.2-pg16
+    container_name: icare-timescaledb
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: icare
+      POSTGRES_PASSWORD: icare
+      POSTGRES_DB: icare
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U icare -d icare"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  app_data:
+  timescaledb_data:

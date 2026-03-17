@@ -10,3 +10,7 @@ logs/
 
 # Ignore environment variables
 .env
+
+# Ignore generated replication data
+data/*.jsonl
+data/*.json

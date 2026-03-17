@@ -1,1 +1,28 @@
-{"name": "deribit-options-analysis", "version": "1.0.0", "description": "A full-stack web application for Deribit options analysis.", "main": "index.js", "scripts": {"test": "echo 'Error: no test specified' && exit 1"}, "keywords": ["Deribit", "options", "analysis", "full-stack"], "author": "Pretoninho", "license": "ISC"}
+{
+	"name": "projet-icare",
+	"version": "1.0.0",
+	"description": "Service de replication temps reel des donnees publiques Deribit.",
+	"main": "src/index.js",
+	"scripts": {
+		"start": "node src/index.js",
+		"check": "node --check src/index.js",
+		"test": "node --test",
+		"db:up": "docker compose up -d timescaledb",
+		"db:down": "docker compose down",
+		"db:logs": "docker compose logs -f timescaledb",
+		"deploy:up": "docker compose up -d --build",
+		"deploy:down": "docker compose down",
+		"deploy:logs": "docker compose logs -f app"
+	},
+	"keywords": [
+		"Deribit",
+		"replication",
+		"websocket",
+		"market-data"
+	],
+	"author": "Pretoninho",
+	"license": "ISC",
+	"dependencies": {
+		"ws": "^8.18.3"
+	}
+}
