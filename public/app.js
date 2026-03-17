@@ -39,6 +39,16 @@ function getSelectedChannel() {
   return refs.channelSelect.value || "";
 }
 
+function getEventPrice(event) {
+  if (!event || !event.data) {
+    return null;
+  }
+
+  const raw = event.data.last_price ?? event.data.price ?? event.data.mark_price ?? null;
+  const price = Number(raw);
+  return Number.isFinite(price) ? price : null;
+}
+
 function formatDate(value) {
   if (!value) {
     return "--";
@@ -139,7 +149,7 @@ function renderSnapshot() {
   const rows = Object.entries(snapshot.latestByChannel)
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([channel, event]) => {
-      const price = event && event.data ? event.data.last_price : null;
+      const price = getEventPrice(event);
       return `
         <tr>
           <td>${escapeHtml(channel)}</td>
@@ -160,22 +170,22 @@ function getChannelEvents() {
 function renderEvents() {
   const events = getChannelEvents().slice(-12).reverse();
   if (events.length === 0) {
-    refs.eventStream.innerHTML = '<div class="empty-state">Aucun événement pour ce canal.</div>';
+    refs.eventStream.innerHTML = '<div class="empty-state">Aucun flux pour cet instrument.</div>';
     return;
   }
 
   refs.eventStream.innerHTML = events
     .map((event) => {
-      const price = event && event.data ? event.data.last_price : null;
-      const markPrice = event && event.data ? event.data.mark_price : null;
+      const price = getEventPrice(event);
+      const markPrice = event && event.data ? (event.data.mark_price ?? event.data.price ?? null) : null;
       return `
         <article class="event-row">
           <header>
             <strong>${escapeHtml(event.channel || "unknown")}</strong>
             <small>${formatDate(event.receivedAt)}</small>
           </header>
-          <div>Dernier prix: ${formatNumber(price, 2)}</div>
-          <div class="muted">Prix de mark: ${formatNumber(markPrice, 2)}</div>
+          <div>Last: ${formatNumber(price, 2)}</div>
+          <div class="muted">Mark: ${formatNumber(markPrice, 2)}</div>
         </article>
       `;
     })
@@ -248,7 +258,7 @@ function renderCandles() {
 }
 
 function renderChart() {
-  const events = getChannelEvents().filter((event) => event.data && Number.isFinite(Number(event.data.last_price)));
+  const events = getChannelEvents().filter((event) => getEventPrice(event) !== null);
   const canvas = refs.chartCanvas;
   const context = canvas.getContext("2d");
   const width = canvas.width;
@@ -257,20 +267,20 @@ function renderChart() {
 
   refs.chartTitle.textContent = getSelectedChannel() || "Aucun canal sélectionné";
   if (events.length < 2) {
-    context.fillStyle = "rgba(93, 100, 95, 0.9)";
-    context.font = "16px Trebuchet MS";
+    context.fillStyle = "rgba(139, 154, 179, 0.92)";
+    context.font = "16px IBM Plex Sans";
     context.fillText("Pas assez de points pour tracer une courbe.", 24, 40);
     return;
   }
 
-  const values = events.slice(-40).map((event) => Number(event.data.last_price));
+  const values = events.slice(-40).map((event) => getEventPrice(event));
   const min = Math.min(...values);
   const max = Math.max(...values);
   const padding = 24;
   const usableWidth = width - padding * 2;
   const usableHeight = height - padding * 2;
 
-  context.strokeStyle = "rgba(31, 35, 33, 0.08)";
+  context.strokeStyle = "rgba(139, 154, 179, 0.25)";
   context.lineWidth = 1;
   for (let index = 0; index < 4; index += 1) {
     const y = padding + (usableHeight / 3) * index;
@@ -281,8 +291,9 @@ function renderChart() {
   }
 
   const gradient = context.createLinearGradient(0, 0, width, height);
-  gradient.addColorStop(0, "#ff8a3d");
-  gradient.addColorStop(1, "#1f7a8c");
+  gradient.addColorStop(0, "#7aa2ff");
+  gradient.addColorStop(0.65, "#2ecc8f");
+  gradient.addColorStop(1, "#f5b84d");
 
   context.strokeStyle = gradient;
   context.lineWidth = 3;
@@ -300,8 +311,8 @@ function renderChart() {
   });
   context.stroke();
 
-  context.fillStyle = "rgba(31, 35, 33, 0.72)";
-  context.font = "12px Trebuchet MS";
+  context.fillStyle = "rgba(139, 154, 179, 0.95)";
+  context.font = "12px IBM Plex Mono";
   context.fillText(`Min ${formatNumber(min, 2)}`, padding, height - 6);
   context.fillText(`Max ${formatNumber(max, 2)}`, width - 120, 18);
 }

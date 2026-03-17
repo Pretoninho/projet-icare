@@ -348,7 +348,9 @@ function parseLimit(rawValue, fallback, maxValue) {
 }
 
 function extractPrice(event) {
-  const rawPrice = event && event.data ? event.data.last_price : null;
+  const rawPrice = event && event.data
+    ? (event.data.last_price ?? event.data.price ?? event.data.mark_price ?? null)
+    : null;
   const price = Number(rawPrice);
   if (!Number.isFinite(price)) {
     return null;

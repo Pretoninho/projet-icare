@@ -9,11 +9,11 @@
   <body>
     <div class="page-shell">
       <header class="hero">
-        <div>
-          <p class="eyebrow">Cockpit de réplication Deribit</p>
+        <div class="brand-wrap">
+          <p class="eyebrow">Trading replication workspace</p>
           <h1>iCare Live Console</h1>
           <p class="hero-copy">
-            Pilote la réplication, surveille l'état de connexion et inspecte les flux de marché en direct depuis une interface locale.
+            Supervise la réplication Deribit en temps réel avec une vue compacte orientée desk: état connexion, prix, volatilité et flux exécution.
           </p>
         </div>
         <div class="hero-side">
@@ -28,7 +28,7 @@
       <main class="dashboard">
         <section class="panel controls-panel">
           <div>
-            <p class="section-label">Canal observé</p>
+            <p class="section-label">Instrument observé</p>
             <select id="channel-select"></select>
           </div>
           <div>
@@ -40,7 +40,7 @@
               <option value="3600000">1 heure</option>
             </select>
           </div>
-          <button id="refresh-button" type="button">Rafraîchir maintenant</button>
+          <button id="refresh-button" type="button">Actualiser le book</button>
         </section>
 
         <section class="metrics-grid">
@@ -50,7 +50,7 @@
             <span id="metric-connected-at">--</span>
           </article>
           <article class="panel metric-card accent-reef">
-            <p class="metric-label">Dernier prix</p>
+            <p class="metric-label">Last traded price</p>
             <strong id="metric-last-price">--</strong>
             <span id="metric-price-change">--</span>
           </article>
@@ -60,7 +60,7 @@
             <span id="metric-last-message">--</span>
           </article>
           <article class="panel metric-card accent-night">
-            <p class="metric-label">Volatilité</p>
+            <p class="metric-label">Volatilité réalisée</p>
             <strong id="metric-volatility">--</strong>
             <span id="metric-change-pct">--</span>
           </article>
@@ -72,7 +72,7 @@
               <p class="section-label">Courbe live</p>
               <h2 id="chart-title">Aucune série sélectionnée</h2>
             </div>
-            <div class="legend-chip">Derniers ticks en mémoire</div>
+            <div class="legend-chip">Tick tape</div>
           </div>
           <canvas id="price-chart" width="960" height="260" aria-label="Graphique des prix"></canvas>
         </section>
@@ -82,7 +82,7 @@
             <div class="panel-head">
               <div>
                 <p class="section-label">Snapshot courant</p>
-                <h2>Dernier état par canal</h2>
+                <h2>Dernier état par instrument</h2>
               </div>
               <div class="legend-chip" id="snapshot-generated-at">--</div>
             </div>
@@ -121,7 +121,7 @@
             <div class="panel-head">
               <div>
                 <p class="section-label">Flux récent</p>
-                <h2>Derniers événements</h2>
+                <h2>Dernières impressions marché</h2>
               </div>
               <div class="legend-chip">Buffer local</div>
             </div>
@@ -132,7 +132,7 @@
             <div class="panel-head">
               <div>
                 <p class="section-label">Bougies</p>
-                <h2>Vue continue OHLC</h2>
+                <h2>Vue agrégée OHLC</h2>
               </div>
               <div class="legend-chip">TimescaleDB</div>
             </div>
