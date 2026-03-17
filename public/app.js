@@ -1,0 +1,422 @@
+const appState = {
+  analytics: null,
+  candles: [],
+  events: [],
+  health: null,
+  snapshot: null,
+  wsConnected: false
+};
+
+const refs = {
+  analyticsList: document.getElementById("analytics-list"),
+  analyticsRange: document.getElementById("analytics-range"),
+  candlesState: document.getElementById("candles-state"),
+  candlesTableBody: document.getElementById("candles-table-body"),
+  candlesTableWrap: document.getElementById("candles-table-wrap"),
+  channelSelect: document.getElementById("channel-select"),
+  chartCanvas: document.getElementById("price-chart"),
+  chartTitle: document.getElementById("chart-title"),
+  connectionPill: document.getElementById("connection-pill"),
+  eventStream: document.getElementById("event-stream"),
+  lastSync: document.getElementById("last-sync"),
+  metricConnectedAt: document.getElementById("metric-connected-at"),
+  metricChangePct: document.getElementById("metric-change-pct"),
+  metricEventsCount: document.getElementById("metric-events-count"),
+  metricLastMessage: document.getElementById("metric-last-message"),
+  metricLastPrice: document.getElementById("metric-last-price"),
+  metricPriceChange: document.getElementById("metric-price-change"),
+  metricStatus: document.getElementById("metric-status"),
+  metricVolatility: document.getElementById("metric-volatility"),
+  refreshButton: document.getElementById("refresh-button"),
+  snapshotGeneratedAt: document.getElementById("snapshot-generated-at"),
+  snapshotTableBody: document.getElementById("snapshot-table-body"),
+  topChannelList: document.getElementById("top-channel-list"),
+  windowSelect: document.getElementById("window-select"),
+  wsIndicator: document.getElementById("ws-indicator")
+};
+
+function getSelectedChannel() {
+  return refs.channelSelect.value || "";
+}
+
+function formatDate(value) {
+  if (!value) {
+    return "--";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "--";
+  }
+
+  return new Intl.DateTimeFormat("fr-FR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    day: "2-digit",
+    month: "2-digit"
+  }).format(date);
+}
+
+function formatNumber(value, digits = 2) {
+  if (value === null || typeof value === "undefined" || Number.isNaN(Number(value))) {
+    return "--";
+  }
+
+  return new Intl.NumberFormat("fr-FR", {
+    maximumFractionDigits: digits,
+    minimumFractionDigits: digits
+  }).format(Number(value));
+}
+
+function formatPercent(value) {
+  if (value === null || typeof value === "undefined" || Number.isNaN(Number(value))) {
+    return "--";
+  }
+
+  const sign = Number(value) > 0 ? "+" : "";
+  return `${sign}${formatNumber(value, 3)} %`;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+async function fetchJson(url) {
+  const response = await fetch(url);
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload.message || `HTTP ${response.status}`);
+  }
+
+  return payload;
+}
+
+function syncChannelOptions() {
+  const channels = appState.health && Array.isArray(appState.health.channels) ? appState.health.channels : [];
+  const previous = getSelectedChannel();
+
+  refs.channelSelect.innerHTML = channels
+    .map((channel) => `<option value="${escapeHtml(channel)}">${escapeHtml(channel)}</option>`)
+    .join("");
+
+  if (channels.length === 0) {
+    refs.channelSelect.innerHTML = '<option value="">Aucun canal</option>';
+    return;
+  }
+
+  refs.channelSelect.value = channels.includes(previous) ? previous : channels[0];
+}
+
+function renderHealth() {
+  const health = appState.health;
+  if (!health) {
+    return;
+  }
+
+  refs.connectionPill.textContent = health.status === "connected" ? "Connecté à Deribit" : "Connexion interrompue";
+  refs.connectionPill.className = `status-pill ${health.status}`;
+  refs.metricStatus.textContent = health.status;
+  refs.metricConnectedAt.textContent = `Ouverte: ${formatDate(health.connectedAt)}`;
+  refs.metricEventsCount.textContent = String(appState.snapshot && appState.snapshot.meta ? appState.snapshot.meta.eventsInMemory : 0);
+  refs.metricLastMessage.textContent = `Dernier message: ${formatDate(health.lastMessageAt)}`;
+  refs.wsIndicator.textContent = `WS local: ${appState.wsConnected ? "connecté" : "hors ligne"}`;
+}
+
+function renderSnapshot() {
+  const snapshot = appState.snapshot;
+  if (!snapshot || !snapshot.latestByChannel) {
+    refs.snapshotTableBody.innerHTML = '<tr><td colspan="3" class="muted">Aucune donnée disponible</td></tr>';
+    return;
+  }
+
+  refs.snapshotGeneratedAt.textContent = `Généré: ${formatDate(snapshot.meta && snapshot.meta.generatedAt)}`;
+  const rows = Object.entries(snapshot.latestByChannel)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([channel, event]) => {
+      const price = event && event.data ? event.data.last_price : null;
+      return `
+        <tr>
+          <td>${escapeHtml(channel)}</td>
+          <td>${formatNumber(price, 2)}</td>
+          <td>${formatDate(event.receivedAt)}</td>
+        </tr>
+      `;
+    });
+
+  refs.snapshotTableBody.innerHTML = rows.join("") || '<tr><td colspan="3" class="muted">Aucune donnée disponible</td></tr>';
+}
+
+function getChannelEvents() {
+  const channel = getSelectedChannel();
+  return appState.events.filter((event) => !channel || event.channel === channel);
+}
+
+function renderEvents() {
+  const events = getChannelEvents().slice(-12).reverse();
+  if (events.length === 0) {
+    refs.eventStream.innerHTML = '<div class="empty-state">Aucun événement pour ce canal.</div>';
+    return;
+  }
+
+  refs.eventStream.innerHTML = events
+    .map((event) => {
+      const price = event && event.data ? event.data.last_price : null;
+      const markPrice = event && event.data ? event.data.mark_price : null;
+      return `
+        <article class="event-row">
+          <header>
+            <strong>${escapeHtml(event.channel || "unknown")}</strong>
+            <small>${formatDate(event.receivedAt)}</small>
+          </header>
+          <div>Dernier prix: ${formatNumber(price, 2)}</div>
+          <div class="muted">Prix de mark: ${formatNumber(markPrice, 2)}</div>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function renderAnalytics() {
+  const analytics = appState.analytics;
+  if (!analytics) {
+    return;
+  }
+
+  refs.analyticsRange.textContent = `${formatDate(analytics.from)} -> ${formatDate(analytics.to)}`;
+  refs.metricLastPrice.textContent = formatNumber(analytics.lastPrice, 2);
+  refs.metricPriceChange.textContent = `Delta: ${formatNumber(analytics.changeAbs, 2)}`;
+  refs.metricVolatility.textContent = formatNumber(analytics.volatilityStdDev, 6);
+  refs.metricChangePct.textContent = `Variation: ${formatPercent(analytics.changePct)}`;
+
+  const items = [
+    ["Canal", analytics.channel],
+    ["Événements", analytics.eventsInWindow],
+    ["Prix observés", analytics.pricedEvents],
+    ["Min", formatNumber(analytics.minPrice, 2)],
+    ["Max", formatNumber(analytics.maxPrice, 2)],
+    ["Log return moyen", formatNumber(analytics.avgLogReturn, 8)]
+  ];
+
+  refs.analyticsList.innerHTML = items
+    .map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value))}</dd></div>`)
+    .join("");
+
+  refs.topChannelList.innerHTML = (analytics.topChannels || [])
+    .map((item) => `<li><span>${escapeHtml(item.name)}</span><strong>${escapeHtml(String(item.count))}</strong></li>`)
+    .join("") || '<li class="muted">Aucune activité récente</li>';
+}
+
+function renderCandles() {
+  if (!appState.candles || appState.candles.error) {
+    refs.candlesState.textContent = appState.candles && appState.candles.message
+      ? appState.candles.message
+      : "TimescaleDB n'est pas disponible pour les bougies.";
+    refs.candlesState.classList.remove("hidden");
+    refs.candlesTableWrap.classList.add("hidden");
+    return;
+  }
+
+  const candles = Array.isArray(appState.candles) ? appState.candles : [];
+  if (candles.length === 0) {
+    refs.candlesState.textContent = "Aucune bougie disponible pour ce canal.";
+    refs.candlesState.classList.remove("hidden");
+    refs.candlesTableWrap.classList.add("hidden");
+    return;
+  }
+
+  refs.candlesTableBody.innerHTML = candles
+    .slice(0, 12)
+    .map((candle) => `
+      <tr>
+        <td>${formatDate(candle.bucket)}</td>
+        <td>${formatNumber(candle.open, 2)}</td>
+        <td>${formatNumber(candle.high, 2)}</td>
+        <td>${formatNumber(candle.low, 2)}</td>
+        <td>${formatNumber(candle.close, 2)}</td>
+        <td>${escapeHtml(String(candle.volume))}</td>
+      </tr>
+    `)
+    .join("");
+  refs.candlesState.classList.add("hidden");
+  refs.candlesTableWrap.classList.remove("hidden");
+}
+
+function renderChart() {
+  const events = getChannelEvents().filter((event) => event.data && Number.isFinite(Number(event.data.last_price)));
+  const canvas = refs.chartCanvas;
+  const context = canvas.getContext("2d");
+  const width = canvas.width;
+  const height = canvas.height;
+  context.clearRect(0, 0, width, height);
+
+  refs.chartTitle.textContent = getSelectedChannel() || "Aucun canal sélectionné";
+  if (events.length < 2) {
+    context.fillStyle = "rgba(93, 100, 95, 0.9)";
+    context.font = "16px Trebuchet MS";
+    context.fillText("Pas assez de points pour tracer une courbe.", 24, 40);
+    return;
+  }
+
+  const values = events.slice(-40).map((event) => Number(event.data.last_price));
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const padding = 24;
+  const usableWidth = width - padding * 2;
+  const usableHeight = height - padding * 2;
+
+  context.strokeStyle = "rgba(31, 35, 33, 0.08)";
+  context.lineWidth = 1;
+  for (let index = 0; index < 4; index += 1) {
+    const y = padding + (usableHeight / 3) * index;
+    context.beginPath();
+    context.moveTo(padding, y);
+    context.lineTo(width - padding, y);
+    context.stroke();
+  }
+
+  const gradient = context.createLinearGradient(0, 0, width, height);
+  gradient.addColorStop(0, "#ff8a3d");
+  gradient.addColorStop(1, "#1f7a8c");
+
+  context.strokeStyle = gradient;
+  context.lineWidth = 3;
+  context.beginPath();
+
+  values.forEach((value, index) => {
+    const x = padding + (usableWidth / Math.max(values.length - 1, 1)) * index;
+    const ratio = max === min ? 0.5 : (value - min) / (max - min);
+    const y = height - padding - ratio * usableHeight;
+    if (index === 0) {
+      context.moveTo(x, y);
+    } else {
+      context.lineTo(x, y);
+    }
+  });
+  context.stroke();
+
+  context.fillStyle = "rgba(31, 35, 33, 0.72)";
+  context.font = "12px Trebuchet MS";
+  context.fillText(`Min ${formatNumber(min, 2)}`, padding, height - 6);
+  context.fillText(`Max ${formatNumber(max, 2)}`, width - 120, 18);
+}
+
+function renderAll() {
+  renderHealth();
+  renderSnapshot();
+  renderAnalytics();
+  renderEvents();
+  renderCandles();
+  renderChart();
+  refs.lastSync.textContent = `Dernière synchro: ${formatDate(new Date().toISOString())}`;
+}
+
+async function loadHealthAndSnapshot() {
+  const [health, snapshot, events] = await Promise.all([
+    fetchJson("/health"),
+    fetchJson("/snapshot"),
+    fetchJson("/events?limit=80")
+  ]);
+
+  appState.health = health;
+  appState.snapshot = snapshot;
+  appState.events = Array.isArray(events.events) ? events.events : [];
+  syncChannelOptions();
+}
+
+async function loadAnalyticsAndCandles() {
+  const channel = encodeURIComponent(getSelectedChannel());
+  const windowMs = encodeURIComponent(refs.windowSelect.value);
+  appState.analytics = await fetchJson(`/analytics?channel=${channel}&windowMs=${windowMs}`);
+
+  try {
+    const candlesPayload = await fetchJson(`/candles?channel=${channel}&limit=12`);
+    appState.candles = candlesPayload.candles || [];
+  } catch (error) {
+    appState.candles = {
+      error: true,
+      message: error.message
+    };
+  }
+}
+
+function connectLocalWebSocket() {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const wsPath = (appState.health && appState.health.localWsPath) ? appState.health.localWsPath : "/stream";
+  const socket = new WebSocket(`${protocol}//${window.location.host}${wsPath}`);
+
+  socket.addEventListener("open", () => {
+    appState.wsConnected = true;
+    renderHealth();
+  });
+
+  socket.addEventListener("close", () => {
+    appState.wsConnected = false;
+    renderHealth();
+    window.setTimeout(connectLocalWebSocket, 1500);
+  });
+
+  socket.addEventListener("message", (event) => {
+    const message = JSON.parse(event.data);
+    if (message.type === "snapshot" && message.payload) {
+      appState.snapshot = message.payload;
+      renderAll();
+      return;
+    }
+
+    if (message.type === "event" && message.payload) {
+      const payload = message.payload;
+      appState.events.push(payload);
+      appState.events = appState.events.slice(-80);
+      if (appState.snapshot && appState.snapshot.latestByChannel) {
+        appState.snapshot.latestByChannel[payload.channel] = payload;
+        if (appState.snapshot.meta) {
+          appState.snapshot.meta.generatedAt = new Date().toISOString();
+          appState.snapshot.meta.eventsInMemory = appState.events.length;
+        }
+      }
+      if (appState.health) {
+        appState.health.lastMessageAt = payload.receivedAt;
+      }
+      renderAll();
+    }
+  });
+}
+
+async function refreshDashboard() {
+  refs.refreshButton.disabled = true;
+  try {
+    await loadHealthAndSnapshot();
+    await loadAnalyticsAndCandles();
+    renderAll();
+  } finally {
+    refs.refreshButton.disabled = false;
+  }
+}
+
+refs.refreshButton.addEventListener("click", () => {
+  refreshDashboard();
+});
+
+refs.channelSelect.addEventListener("change", () => {
+  refreshDashboard();
+});
+
+refs.windowSelect.addEventListener("change", () => {
+  refreshDashboard();
+});
+
+window.addEventListener("load", async () => {
+  await refreshDashboard();
+  connectLocalWebSocket();
+  window.setInterval(() => {
+    loadAnalyticsAndCandles()
+      .then(renderAll)
+      .catch(() => {});
+  }, 10000);
+});

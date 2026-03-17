@@ -59,6 +59,36 @@ function httpGetJson(port, pathname) {
   });
 }
 
+function httpGetText(port, pathname) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        host: "127.0.0.1",
+        port,
+        path: pathname,
+        method: "GET"
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (chunk) => {
+          data += chunk.toString();
+        });
+
+        res.on("end", () => {
+          resolve({
+            statusCode: res.statusCode,
+            body: data,
+            headers: res.headers
+          });
+        });
+      }
+    );
+
+    req.on("error", reject);
+    req.end();
+  });
+}
+
 async function waitFor(condition, timeoutMs, message) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -131,6 +161,13 @@ test("replication et API locale fonctionnent avec mock Deribit", async (t) => {
       clearInterval(broadcastTimer);
     }
 
+    for (const client of deribitServer.clients) {
+      try {
+        client.terminate();
+      } catch (_error) {
+      }
+    }
+
     await new Promise((resolve) => deribitServer.close(resolve));
   });
 
@@ -178,6 +215,11 @@ test("replication et API locale fonctionnent avec mock Deribit", async (t) => {
     const health = await httpGetJson(apiPort, "/health");
     return health.body.status === "connected";
   }, 10000, "Connexion mock Deribit non etablie");
+
+  const homePage = await httpGetText(apiPort, "/");
+  assert.equal(homePage.statusCode, 200);
+  assert.match(homePage.headers["content-type"], /text\/html/);
+  assert.match(homePage.body, /iCare Live Console/);
 
   await waitFor(async () => {
     const snapshot = await httpGetJson(apiPort, "/snapshot");

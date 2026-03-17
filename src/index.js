@@ -33,8 +33,17 @@ const channels = process.env.DERIBIT_CHANNELS
   : DEFAULT_CHANNELS;
 
 const dataDir = path.join(process.cwd(), "data");
+const publicDir = path.join(process.cwd(), "public");
 const eventsPath = path.join(dataDir, "events.jsonl");
 const snapshotPath = path.join(dataDir, "snapshot.json");
+
+const mimeTypes = {
+  ".css": "text/css; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml; charset=utf-8"
+};
 
 fs.mkdirSync(dataDir, { recursive: true });
 
@@ -258,6 +267,54 @@ function sendJson(res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function sendText(res, statusCode, contentType, payload) {
+  res.writeHead(statusCode, { "Content-Type": contentType });
+  res.end(payload);
+}
+
+function resolveStaticAsset(urlPathname) {
+  const relativePath = urlPathname === "/" ? "index.html" : urlPathname.replace(/^\/+/, "");
+  const normalizedPath = path.normalize(relativePath);
+  if (normalizedPath.startsWith("..") || path.isAbsolute(normalizedPath)) {
+    return null;
+  }
+
+  return path.join(publicDir, normalizedPath);
+}
+
+function serveStaticAsset(res, urlPathname) {
+  const assetPath = resolveStaticAsset(urlPathname);
+  if (!assetPath) {
+    sendJson(res, 404, {
+      error: "Not Found",
+      message: "Use /health, /snapshot, /events, /candles, /analytics or /"
+    });
+    return;
+  }
+
+  fs.readFile(assetPath, (error, content) => {
+    if (error) {
+      if (error.code === "ENOENT") {
+        sendJson(res, 404, {
+          error: "Not Found",
+          message: "Use /health, /snapshot, /events, /candles, /analytics or /"
+        });
+        return;
+      }
+
+      sendJson(res, 500, {
+        error: "static_asset_failed",
+        message: error.message
+      });
+      return;
+    }
+
+    const extension = path.extname(assetPath).toLowerCase();
+    const contentType = mimeTypes[extension] || "application/octet-stream";
+    sendText(res, 200, contentType, content);
+  });
+}
+
 function buildHealth() {
   return {
     status: state.connectedAt ? "connected" : "disconnected",
@@ -265,6 +322,7 @@ function buildHealth() {
     lastMessageAt: state.lastMessageAt,
     reconnectCount: state.reconnectCount,
     channels: state.channels,
+    localWsPath: LOCAL_WS_PATH,
     localWsClients: localClients.size,
     database: {
       enabled: dbEnabled,
@@ -443,6 +501,11 @@ function broadcastToLocalClients(event) {
 function startApiServer() {
   apiServer = http.createServer((req, res) => {
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+
+    if (req.method === "GET" && (url.pathname === "/" || url.pathname.startsWith("/assets/"))) {
+      serveStaticAsset(res, url.pathname === "/" ? "/" : url.pathname.replace(/^\/assets\//, "/"));
+      return;
+    }
 
     if (req.method === "GET" && url.pathname === "/health") {
       sendJson(res, 200, buildHealth());

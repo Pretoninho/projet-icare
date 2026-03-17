@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>iCare Live Console</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Cockpit de réplication Deribit</p>
+          <h1>iCare Live Console</h1>
+          <p class="hero-copy">
+            Pilote la réplication, surveille l'état de connexion et inspecte les flux de marché en direct depuis une interface locale.
+          </p>
+        </div>
+        <div class="hero-side">
+          <div class="status-pill" id="connection-pill">Initialisation</div>
+          <div class="hero-meta">
+            <span id="ws-indicator">WS local: en attente</span>
+            <span id="last-sync">Dernière synchro: --</span>
+          </div>
+        </div>
+      </header>
+
+      <main class="dashboard">
+        <section class="panel controls-panel">
+          <div>
+            <p class="section-label">Canal observé</p>
+            <select id="channel-select"></select>
+          </div>
+          <div>
+            <p class="section-label">Fenêtre analytics</p>
+            <select id="window-select">
+              <option value="60000">1 minute</option>
+              <option value="300000" selected>5 minutes</option>
+              <option value="900000">15 minutes</option>
+              <option value="3600000">1 heure</option>
+            </select>
+          </div>
+          <button id="refresh-button" type="button">Rafraîchir maintenant</button>
+        </section>
+
+        <section class="metrics-grid">
+          <article class="panel metric-card accent-sun">
+            <p class="metric-label">Connexion Deribit</p>
+            <strong id="metric-status">--</strong>
+            <span id="metric-connected-at">--</span>
+          </article>
+          <article class="panel metric-card accent-reef">
+            <p class="metric-label">Dernier prix</p>
+            <strong id="metric-last-price">--</strong>
+            <span id="metric-price-change">--</span>
+          </article>
+          <article class="panel metric-card accent-clay">
+            <p class="metric-label">Événements en mémoire</p>
+            <strong id="metric-events-count">0</strong>
+            <span id="metric-last-message">--</span>
+          </article>
+          <article class="panel metric-card accent-night">
+            <p class="metric-label">Volatilité</p>
+            <strong id="metric-volatility">--</strong>
+            <span id="metric-change-pct">--</span>
+          </article>
+        </section>
+
+        <section class="panel chart-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-label">Courbe live</p>
+              <h2 id="chart-title">Aucune série sélectionnée</h2>
+            </div>
+            <div class="legend-chip">Derniers ticks en mémoire</div>
+          </div>
+          <canvas id="price-chart" width="960" height="260" aria-label="Graphique des prix"></canvas>
+        </section>
+
+        <section class="two-column">
+          <article class="panel snapshot-panel">
+            <div class="panel-head">
+              <div>
+                <p class="section-label">Snapshot courant</p>
+                <h2>Dernier état par canal</h2>
+              </div>
+              <div class="legend-chip" id="snapshot-generated-at">--</div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Canal</th>
+                    <th>Prix</th>
+                    <th>Réception</th>
+                  </tr>
+                </thead>
+                <tbody id="snapshot-table-body"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="panel analytics-panel">
+            <div class="panel-head">
+              <div>
+                <p class="section-label">Analytics</p>
+                <h2>Résumé de fenêtre</h2>
+              </div>
+              <div class="legend-chip" id="analytics-range">--</div>
+            </div>
+            <dl class="analytics-list" id="analytics-list"></dl>
+            <div>
+              <p class="section-label">Top canaux</p>
+              <ul class="top-channel-list" id="top-channel-list"></ul>
+            </div>
+          </article>
+        </section>
+
+        <section class="two-column">
+          <article class="panel events-panel">
+            <div class="panel-head">
+              <div>
+                <p class="section-label">Flux récent</p>
+                <h2>Derniers événements</h2>
+              </div>
+              <div class="legend-chip">Buffer local</div>
+            </div>
+            <div class="event-stream" id="event-stream"></div>
+          </article>
+
+          <article class="panel candles-panel">
+            <div class="panel-head">
+              <div>
+                <p class="section-label">Bougies</p>
+                <h2>Vue continue OHLC</h2>
+              </div>
+              <div class="legend-chip">TimescaleDB</div>
+            </div>
+            <div id="candles-state" class="empty-state">Chargement...</div>
+            <div class="table-wrap hidden" id="candles-table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Bucket</th>
+                    <th>Open</th>
+                    <th>High</th>
+                    <th>Low</th>
+                    <th>Close</th>
+                    <th>Volume</th>
+                  </tr>
+                </thead>
+                <tbody id="candles-table-body"></tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <script src="/assets/app.js"></script>
+  </body>
+</html>
