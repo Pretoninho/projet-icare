@@ -4,6 +4,13 @@ const appState = {
   candles: [],
   events: [],
   health: null,
+  notifications: {
+    cooldownMs: 300000,
+    enabled: false,
+    lastSentByKey: {},
+    minProbability: 0.60,
+    permission: "default"
+  },
   regimeQuality: null,
   signal: null,
   snapshot: null,
@@ -30,6 +37,11 @@ const refs = {
   metricPriceChange: document.getElementById("metric-price-change"),
   metricStatus: document.getElementById("metric-status"),
   metricVolatility: document.getElementById("metric-volatility"),
+  notificationCooldown: document.getElementById("notification-cooldown"),
+  notificationLog: document.getElementById("notification-log"),
+  notificationStatus: document.getElementById("notification-status"),
+  notificationThreshold: document.getElementById("notification-threshold"),
+  notificationToggle: document.getElementById("notification-toggle"),
   refreshButton: document.getElementById("refresh-button"),
   regimeRangeHigh: document.getElementById("regime-range-high"),
   regimeRangeLow: document.getElementById("regime-range-low"),
@@ -122,6 +134,172 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/\"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function loadNotificationPreferences() {
+  try {
+    const raw = window.localStorage.getItem("icare.notification.preferences");
+    if (!raw) {
+      return;
+    }
+
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      if (Number.isFinite(Number(parsed.cooldownMs))) {
+        appState.notifications.cooldownMs = Number(parsed.cooldownMs);
+      }
+      if (Number.isFinite(Number(parsed.minProbability))) {
+        appState.notifications.minProbability = Number(parsed.minProbability);
+      }
+      if (typeof parsed.enabled === "boolean") {
+        appState.notifications.enabled = parsed.enabled;
+      }
+    }
+  } catch (_error) {
+  }
+}
+
+function persistNotificationPreferences() {
+  const payload = {
+    cooldownMs: appState.notifications.cooldownMs,
+    enabled: appState.notifications.enabled,
+    minProbability: appState.notifications.minProbability
+  };
+
+  try {
+    window.localStorage.setItem("icare.notification.preferences", JSON.stringify(payload));
+  } catch (_error) {
+  }
+}
+
+function updateNotificationStatus() {
+  const notificationsAvailable = typeof window.Notification !== "undefined";
+  appState.notifications.permission = notificationsAvailable ? Notification.permission : "unsupported";
+  const enabled = appState.notifications.enabled;
+  const permission = appState.notifications.permission;
+
+  if (!enabled) {
+    refs.notificationStatus.textContent = "Inactif";
+    refs.notificationToggle.textContent = "Activer les notifications";
+    return;
+  }
+
+  if (permission === "granted") {
+    refs.notificationStatus.textContent = "Actif navigateur";
+  } else if (permission === "unsupported") {
+    refs.notificationStatus.textContent = "Actif in-app";
+  } else {
+    refs.notificationStatus.textContent = "Actif limité";
+  }
+
+  refs.notificationToggle.textContent = "Désactiver les notifications";
+}
+
+function pushNotificationLog(level, message) {
+  const item = document.createElement("li");
+  item.className = `notification-item notification-${level}`;
+  item.textContent = `${formatDate(new Date().toISOString())} • ${message}`;
+
+  if (refs.notificationLog.firstElementChild && refs.notificationLog.firstElementChild.classList.contains("muted")) {
+    refs.notificationLog.innerHTML = "";
+  }
+
+  refs.notificationLog.prepend(item);
+  while (refs.notificationLog.children.length > 8) {
+    refs.notificationLog.removeChild(refs.notificationLog.lastElementChild);
+  }
+}
+
+function postNotificationAudit(payload) {
+  fetch("/notifications", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  }).catch(() => {});
+}
+
+function canDispatchNotification(key) {
+  const now = Date.now();
+  const last = appState.notifications.lastSentByKey[key] || 0;
+  return (now - last) >= appState.notifications.cooldownMs;
+}
+
+function dispatchNotification(kind, key, title, message) {
+  if (!appState.notifications.enabled || !canDispatchNotification(key)) {
+    return;
+  }
+
+  appState.notifications.lastSentByKey[key] = Date.now();
+  pushNotificationLog(kind, `${title}: ${message}`);
+  postNotificationAudit({
+    level: kind,
+    title,
+    message,
+    channel: getSelectedChannel() || null,
+    context: {
+      cooldownMs: appState.notifications.cooldownMs,
+      minProbability: appState.notifications.minProbability
+    }
+  });
+
+  if (typeof window.Notification !== "undefined" && Notification.permission === "granted") {
+    try {
+      new Notification(title, { body: message, tag: key });
+    } catch (_error) {
+    }
+  }
+}
+
+function evaluateNotificationRules() {
+  const signalPayload = appState.signal;
+  if (!signalPayload || !signalPayload.decision) {
+    return;
+  }
+
+  const channel = getSelectedChannel() || "all";
+  const decision = signalPayload.decision;
+  const probability = Number(decision.probability);
+  const confidence = String(decision.confidence || "").toLowerCase();
+  const killSwitch = decision.killSwitch || {};
+  const direction = String(decision.signal || "neutral").toLowerCase();
+
+  if ((direction === "long" || direction === "short")
+    && Number.isFinite(probability)
+    && probability >= appState.notifications.minProbability
+    && confidence !== "low"
+    && !killSwitch.spreadTooWide
+    && !killSwitch.volatilityTooHigh) {
+    const key = `signal-${channel}-${direction}`;
+    const message = `${channel} ${direction.toUpperCase()} @ ${formatProbability(probability)} | Confiance ${confidence.toUpperCase()}`;
+    dispatchNotification("signal", key, "Signal tactique", message);
+  }
+
+  if (killSwitch.spreadTooWide || killSwitch.volatilityTooHigh) {
+    const key = `killswitch-${channel}`;
+    const details = [];
+    if (killSwitch.spreadTooWide) {
+      details.push("spread large");
+    }
+    if (killSwitch.volatilityTooHigh) {
+      details.push("volatilité élevée");
+    }
+    dispatchNotification("risk", key, "Kill-switch actif", `${channel}: ${details.join(", ")}`);
+  }
+
+  const quality = appState.regimeQuality;
+  const globalAcc = quality && quality.total ? Number(quality.total.accuracy) : null;
+  const sample = quality && quality.total ? Number(quality.total.sample) : null;
+  if (Number.isFinite(globalAcc) && Number.isFinite(sample) && sample >= 30 && globalAcc < 0.45) {
+    const key = `regime-quality-${channel}`;
+    dispatchNotification(
+      "quality",
+      key,
+      "Qualité modèle en baisse",
+      `${channel}: accuracy globale ${formatProbability(globalAcc)} sur ${sample} labels`
+    );
+  }
 }
 
 function drawReliabilitySparkline(history) {
@@ -529,6 +707,8 @@ function renderAll() {
   renderEvents();
   renderCandles();
   renderChart();
+  updateNotificationStatus();
+  evaluateNotificationRules();
   refs.lastSync.textContent = `Dernière synchro: ${formatDate(new Date().toISOString())}`;
 }
 
@@ -645,7 +825,42 @@ refs.windowSelect.addEventListener("change", () => {
   refreshDashboard();
 });
 
+refs.notificationThreshold.addEventListener("change", () => {
+  appState.notifications.minProbability = Number(refs.notificationThreshold.value);
+  persistNotificationPreferences();
+});
+
+refs.notificationCooldown.addEventListener("change", () => {
+  appState.notifications.cooldownMs = Number(refs.notificationCooldown.value);
+  persistNotificationPreferences();
+});
+
+refs.notificationToggle.addEventListener("click", async () => {
+  if (appState.notifications.enabled) {
+    appState.notifications.enabled = false;
+    persistNotificationPreferences();
+    updateNotificationStatus();
+    return;
+  }
+
+  if (typeof window.Notification !== "undefined" && Notification.permission === "default") {
+    try {
+      await Notification.requestPermission();
+    } catch (_error) {
+    }
+  }
+
+  appState.notifications.enabled = true;
+  persistNotificationPreferences();
+  updateNotificationStatus();
+  pushNotificationLog("system", "Notifications activées");
+});
+
 window.addEventListener("load", async () => {
+  loadNotificationPreferences();
+  refs.notificationThreshold.value = String(appState.notifications.minProbability);
+  refs.notificationCooldown.value = String(appState.notifications.cooldownMs);
+  updateNotificationStatus();
   await refreshDashboard();
   connectLocalWebSocket();
   window.setInterval(() => {

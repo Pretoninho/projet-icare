@@ -153,6 +153,9 @@ Avec TIMESCALE_ENABLED=true et une base compatible TimescaleDB:
 - GET /labels?channel=ticker.BTC-PERPETUAL.raw&limit=200: labels ex post (tp/sl/timeout)
 - GET /series/schema: schéma logique des séries market/features/labels
 - GET /backtest/rolling?channel=ticker.BTC-PERPETUAL.raw&labels=200&windows=10: accuracy rolling, score de fiabilité et historique pour sparkline
+- GET /quality/regime?channel=ticker.BTC-PERPETUAL.raw&labels=300: qualité du modèle par régime (trend/range x vol)
+- GET /notifications?limit=200: historique serveur des alertes (JSONL)
+- POST /notifications: journalise une alerte côté serveur pour audit persistant
 Exemple:
 - data/series_deribit.jsonl: série normalisée Deribit (prix, mark, bid/ask, open interest)
 - data/series_features.jsonl: features calculées (retours, z-score, vol réalisée, spread)

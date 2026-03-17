@@ -61,6 +61,7 @@ const snapshotPath = path.join(dataDir, "snapshot.json");
 const deribitSeriesPath = path.join(dataDir, DERIBIT_SERIES_PATH);
 const featuresSeriesPath = path.join(dataDir, FEATURES_SERIES_PATH);
 const labelsSeriesPath = path.join(dataDir, LABELS_SERIES_PATH);
+const notificationsPath = path.join(dataDir, "notifications.jsonl");
 
 const mimeTypes = {
   ".css": "text/css; charset=utf-8",
@@ -142,6 +143,73 @@ function appendSeriesLine(filePath, record, label) {
     if (error) {
       log(`Erreur ecriture ${label}`, error.message);
     }
+  });
+}
+
+function appendNotificationAudit(notification) {
+  const record = {
+    ts: new Date().toISOString(),
+    ...notification
+  };
+  appendSeriesLine(notificationsPath, record, "notifications.jsonl");
+}
+
+function readNotificationAudit(limit) {
+  try {
+    if (!fs.existsSync(notificationsPath)) {
+      return [];
+    }
+
+    const raw = fs.readFileSync(notificationsPath, "utf8");
+    const rows = raw
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch (_error) {
+          return null;
+        }
+      })
+      .filter(Boolean);
+
+    return rows.slice(-limit);
+  } catch (error) {
+    log("Lecture notifications.jsonl en echec", error.message);
+    return [];
+  }
+}
+
+function readJsonBody(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    let size = 0;
+
+    req.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        reject(new Error("payload_too_large"));
+        req.destroy();
+        return;
+      }
+
+      body += chunk.toString("utf8");
+    });
+
+    req.on("end", () => {
+      if (!body) {
+        resolve({});
+        return;
+      }
+
+      try {
+        resolve(JSON.parse(body));
+      } catch (_error) {
+        reject(new Error("invalid_json"));
+      }
+    });
+
+    req.on("error", (error) => reject(error));
   });
 }
 
@@ -1262,7 +1330,7 @@ function serveStaticAsset(res, urlPathname) {
   if (!assetPath) {
     sendJson(res, 404, {
       error: "Not Found",
-      message: "Use /health, /snapshot, /events, /candles, /analytics, /signal, /features, /labels, /series/schema, /backtest/rolling, /quality/regime or /"
+      message: "Use /health, /snapshot, /events, /candles, /analytics, /signal, /features, /labels, /series/schema, /backtest/rolling, /quality/regime, /notifications or /"
     });
     return;
   }
@@ -1272,7 +1340,7 @@ function serveStaticAsset(res, urlPathname) {
       if (error.code === "ENOENT") {
         sendJson(res, 404, {
           error: "Not Found",
-          message: "Use /health, /snapshot, /events, /candles, /analytics, /signal, /features, /labels, /series/schema, /backtest/rolling, /quality/regime or /"
+          message: "Use /health, /snapshot, /events, /candles, /analytics, /signal, /features, /labels, /series/schema, /backtest/rolling, /quality/regime, /notifications or /"
         });
         return;
       }
@@ -1659,9 +1727,65 @@ function startApiServer() {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/notifications") {
+      const limit = parseLimit(url.searchParams.get("limit") || 200, 200, 5000);
+      const notifications = readNotificationAudit(limit);
+      sendJson(res, 200, {
+        count: notifications.length,
+        notifications
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/notifications") {
+      readJsonBody(req, 1024 * 64)
+        .then((payload) => {
+          const level = typeof payload.level === "string" ? payload.level : "info";
+          const title = typeof payload.title === "string" ? payload.title : "Notification";
+          const message = typeof payload.message === "string" ? payload.message : "";
+          const channel = typeof payload.channel === "string" ? payload.channel : null;
+
+          appendNotificationAudit({
+            channel,
+            level,
+            title,
+            message,
+            context: payload && typeof payload.context === "object" ? payload.context : null,
+            source: "ui"
+          });
+
+          sendJson(res, 201, {
+            ok: true
+          });
+        })
+        .catch((error) => {
+          if (error.message === "payload_too_large") {
+            sendJson(res, 413, {
+              error: "payload_too_large",
+              message: "Notification payload exceeds 64KB"
+            });
+            return;
+          }
+
+          if (error.message === "invalid_json") {
+            sendJson(res, 400, {
+              error: "invalid_json",
+              message: "Invalid JSON body"
+            });
+            return;
+          }
+
+          sendJson(res, 500, {
+            error: "notification_write_failed",
+            message: error.message
+          });
+        });
+      return;
+    }
+
     sendJson(res, 404, {
       error: "Not Found",
-      message: "Use /health, /snapshot, /events, /candles, /analytics, /signal, /features, /labels, /series/schema, /backtest/rolling or /quality/regime"
+      message: "Use /health, /snapshot, /events, /candles, /analytics, /signal, /features, /labels, /series/schema, /backtest/rolling, /quality/regime or /notifications"
     });
   });
 

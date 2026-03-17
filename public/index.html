@@ -43,6 +43,39 @@
           <button id="refresh-button" type="button">Actualiser le book</button>
         </section>
 
+        <section class="panel notification-panel">
+          <div class="panel-head">
+            <div>
+              <p class="section-label">Notifications</p>
+              <h2>Programme d'alertes live</h2>
+            </div>
+            <div class="legend-chip" id="notification-status">Inactif</div>
+          </div>
+          <div class="notification-controls">
+            <button id="notification-toggle" type="button">Activer les notifications</button>
+            <div>
+              <p class="section-label">Seuil probabilité</p>
+              <select id="notification-threshold">
+                <option value="0.55">55 %</option>
+                <option value="0.60" selected>60 %</option>
+                <option value="0.65">65 %</option>
+                <option value="0.70">70 %</option>
+              </select>
+            </div>
+            <div>
+              <p class="section-label">Cooldown</p>
+              <select id="notification-cooldown">
+                <option value="300000" selected>5 min</option>
+                <option value="900000">15 min</option>
+                <option value="1800000">30 min</option>
+              </select>
+            </div>
+          </div>
+          <ul class="notification-log" id="notification-log">
+            <li class="muted">Alerte: aucun événement pour le moment.</li>
+          </ul>
+        </section>
+
         <section class="metrics-grid">
           <article class="panel metric-card accent-sun">
             <p class="metric-label">Connexion Deribit</p>

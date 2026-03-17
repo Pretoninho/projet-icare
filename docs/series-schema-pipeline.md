@@ -83,6 +83,8 @@
 - `GET /signal?channel=...`: signal actuel + probabilité + SL/TP
 - `GET /backtest/rolling?channel=...&labels=...`: accuracy rolling, coverage, reliability score
 - `GET /quality/regime?channel=...&labels=...`: qualité par régime trend/range et vol low/high
+- `GET /notifications?limit=...`: audit des notifications persisté côté serveur
+- `POST /notifications`: append d'une notification dans `data/notifications.jsonl`
 
 ## Notes d'exploitation
 - Le signal est heuristique (`model: heuristic-v1`) et doit être calibré avec historique plus long.
