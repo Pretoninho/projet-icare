@@ -35,6 +35,11 @@ const SCORE_WEIGHT_OPTIONS = Number(process.env.SCORE_WEIGHT_OPTIONS || 0.20);
 const SCORE_WEIGHT_RISK = Number(process.env.SCORE_WEIGHT_RISK || 0.10);
 const KILL_SWITCH_MAX_SPREAD_BPS = Number(process.env.KILL_SWITCH_MAX_SPREAD_BPS || 24);
 const KILL_SWITCH_MAX_REALIZED_VOL = Number(process.env.KILL_SWITCH_MAX_REALIZED_VOL || 0.03);
+const CALIBRATOR_METHOD = process.env.CALIBRATOR_METHOD || "platt";
+const CALIBRATION_LOOKBACK_LABELS = Number(process.env.CALIBRATION_LOOKBACK_LABELS || 800);
+const CALIBRATION_MIN_SAMPLES = Number(process.env.CALIBRATION_MIN_SAMPLES || 60);
+const REGIME_TREND_THRESHOLD = Number(process.env.REGIME_TREND_THRESHOLD || 0.0035);
+const REGIME_VOL_HIGH_THRESHOLD = Number(process.env.REGIME_VOL_HIGH_THRESHOLD || 0.01);
 const DERIBIT_SERIES_PATH = process.env.DERIBIT_SERIES_PATH || "series_deribit.jsonl";
 const FEATURES_SERIES_PATH = process.env.FEATURES_SERIES_PATH || "series_features.jsonl";
 const LABELS_SERIES_PATH = process.env.LABELS_SERIES_PATH || "series_labels.jsonl";
@@ -212,18 +217,42 @@ function extractMarketPoint(event) {
     return null;
   }
 
+  const indexPrice = extractNumberFromData(data, "index_price");
+  const markPrice = extractNumberFromData(data, "mark_price");
+  const fundingRate = extractNumberFromData(data, "current_funding")
+    ?? extractNumberFromData(data, "funding_8h")
+    ?? extractNumberFromData(data, "funding_rate");
+  const funding8h = extractNumberFromData(data, "funding_8h");
+  const markIv = extractNumberFromData(data, "mark_iv")
+    ?? extractNumberFromData(data, "iv");
+  const bidIv = extractNumberFromData(data, "bid_iv");
+  const askIv = extractNumberFromData(data, "ask_iv");
+  const ivSkew = Number.isFinite(bidIv) && Number.isFinite(askIv)
+    ? askIv - bidIv
+    : null;
+  const basisBps = Number.isFinite(indexPrice) && indexPrice !== 0
+    ? ((lastPrice - indexPrice) / indexPrice) * 10000
+    : null;
+
   return {
     type: "market_point",
     ts: event.receivedAt,
     channel: event.channel,
     instrument: extractInstrument(event.channel),
     lastPrice,
-    markPrice: extractNumberFromData(data, "mark_price"),
-    indexPrice: extractNumberFromData(data, "index_price"),
+    markPrice,
+    indexPrice,
     bestBid: extractNumberFromData(data, "best_bid_price"),
     bestAsk: extractNumberFromData(data, "best_ask_price"),
     openInterest: extractNumberFromData(data, "open_interest"),
     volume24h: extractNumberFromData(data, "stats.volume"),
+    fundingRate,
+    funding8h,
+    basisBps,
+    markIv,
+    bidIv,
+    askIv,
+    ivSkew,
     source: "deribit_ws"
   };
 }
@@ -292,6 +321,32 @@ function buildFeaturePoint(channel, marketSeries) {
   const oiNow = latest.openInterest;
   const oiDelta = Number.isFinite(oiNow) && Number.isFinite(oiPrev) ? oiNow - oiPrev : null;
 
+  const fundingSeries = marketSeries
+    .slice(-FEATURE_WINDOW_SLOW)
+    .map((point) => point.fundingRate)
+    .filter((value) => Number.isFinite(value));
+  const lastFunding = Number.isFinite(latest.fundingRate) ? latest.fundingRate : null;
+  const fundingMean = fundingSeries.length > 0 ? computeMean(fundingSeries) : null;
+  const fundingStd = fundingSeries.length > 1 ? computeStdDev(fundingSeries) : null;
+  const fundingZScore = Number.isFinite(lastFunding) && Number.isFinite(fundingMean) && Number.isFinite(fundingStd) && fundingStd > 0
+    ? (lastFunding - fundingMean) / fundingStd
+    : null;
+
+  const basisBps = Number.isFinite(latest.basisBps) ? latest.basisBps : null;
+  const basisDislocation = Number.isFinite(basisBps) ? Math.abs(basisBps) : null;
+
+  const ivSeries = marketSeries
+    .slice(-FEATURE_WINDOW_SLOW)
+    .map((point) => point.markIv)
+    .filter((value) => Number.isFinite(value));
+  const ivNow = Number.isFinite(latest.markIv) ? latest.markIv : null;
+  const ivMin = ivSeries.length > 0 ? Math.min(...ivSeries) : null;
+  const ivMax = ivSeries.length > 0 ? Math.max(...ivSeries) : null;
+  const ivRank = Number.isFinite(ivNow) && Number.isFinite(ivMin) && Number.isFinite(ivMax) && ivMax > ivMin
+    ? (ivNow - ivMin) / (ivMax - ivMin)
+    : null;
+  const ivSkew = Number.isFinite(latest.ivSkew) ? latest.ivSkew : null;
+
   return {
     type: "feature_point",
     ts: latest.ts,
@@ -305,6 +360,13 @@ function buildFeaturePoint(channel, marketSeries) {
     realizedVol,
     spreadBps: spread,
     oiDelta,
+    fundingRate: lastFunding,
+    fundingZScore,
+    basisBps,
+    basisDislocation,
+    ivMark: ivNow,
+    ivRank,
+    ivSkew,
     windows: {
       fast: FEATURE_WINDOW_FAST,
       slow: FEATURE_WINDOW_SLOW
@@ -397,6 +459,16 @@ function buildLabelRecord(pendingFeature, marketSeries, horizonPoints, slPct, tp
       slPct,
       tpPct
     },
+    regime: {
+      trend: Number.isFinite(pendingFeature.returnSlow) && Math.abs(pendingFeature.returnSlow) >= REGIME_TREND_THRESHOLD
+        ? "trend"
+        : "range",
+      volatility: Number.isFinite(pendingFeature.realizedVol) && pendingFeature.realizedVol >= REGIME_VOL_HIGH_THRESHOLD
+        ? "high"
+        : "low",
+      trendStrength: Number.isFinite(pendingFeature.returnSlow) ? Math.abs(pendingFeature.returnSlow) : null,
+      volatilityValue: Number.isFinite(pendingFeature.realizedVol) ? pendingFeature.realizedVol : null
+    },
     prediction: {
       model: pendingFeature.prediction && pendingFeature.prediction.model
         ? pendingFeature.prediction.model
@@ -443,6 +515,232 @@ function computeBacktestMetrics(labels) {
       coverage,
       reliabilityScore
     }
+  };
+}
+
+function fitPlattCalibrator(samples) {
+  if (!Array.isArray(samples) || samples.length === 0) {
+    return null;
+  }
+
+  let a = 1;
+  let b = 0;
+  const learningRate = 0.08;
+  const iterations = 220;
+
+  for (let iter = 0; iter < iterations; iter += 1) {
+    let gradA = 0;
+    let gradB = 0;
+    for (const sample of samples) {
+      const x = clamp(sample.rawProbability, 1e-6, 1 - 1e-6);
+      const y = sample.target;
+      const z = (a * x) + b;
+      const p = sigmoid(z);
+      const diff = p - y;
+      gradA += diff * x;
+      gradB += diff;
+    }
+
+    gradA /= samples.length;
+    gradB /= samples.length;
+    a -= learningRate * gradA;
+    b -= learningRate * gradB;
+  }
+
+  return {
+    method: "platt",
+    sampleSize: samples.length,
+    a,
+    b
+  };
+}
+
+function fitIsotonicCalibrator(samples) {
+  if (!Array.isArray(samples) || samples.length === 0) {
+    return null;
+  }
+
+  const sorted = [...samples]
+    .sort((left, right) => left.rawProbability - right.rawProbability)
+    .map((sample) => ({
+      minProb: sample.rawProbability,
+      maxProb: sample.rawProbability,
+      sumTarget: sample.target,
+      count: 1
+    }));
+
+  const blocks = [];
+  for (const point of sorted) {
+    blocks.push(point);
+    while (blocks.length >= 2) {
+      const last = blocks[blocks.length - 1];
+      const prev = blocks[blocks.length - 2];
+      const prevMean = prev.sumTarget / prev.count;
+      const lastMean = last.sumTarget / last.count;
+      if (prevMean <= lastMean) {
+        break;
+      }
+
+      blocks.pop();
+      blocks.pop();
+      blocks.push({
+        minProb: Math.min(prev.minProb, last.minProb),
+        maxProb: Math.max(prev.maxProb, last.maxProb),
+        sumTarget: prev.sumTarget + last.sumTarget,
+        count: prev.count + last.count
+      });
+    }
+  }
+
+  return {
+    method: "isotonic",
+    sampleSize: samples.length,
+    blocks: blocks.map((block) => ({
+      minProb: block.minProb,
+      maxProb: block.maxProb,
+      value: block.sumTarget / block.count,
+      count: block.count
+    }))
+  };
+}
+
+function applyCalibration(rawProbability, calibrator) {
+  const raw = clamp(rawProbability, 1e-6, 1 - 1e-6);
+  if (!calibrator) {
+    return raw;
+  }
+
+  if (calibrator.method === "platt") {
+    return clamp(sigmoid((calibrator.a * raw) + calibrator.b), 1e-6, 1 - 1e-6);
+  }
+
+  if (calibrator.method === "isotonic") {
+    const blocks = Array.isArray(calibrator.blocks) ? calibrator.blocks : [];
+    if (blocks.length === 0) {
+      return raw;
+    }
+
+    for (const block of blocks) {
+      if (raw >= block.minProb && raw <= block.maxProb) {
+        return clamp(block.value, 1e-6, 1 - 1e-6);
+      }
+    }
+
+    if (raw < blocks[0].minProb) {
+      return clamp(blocks[0].value, 1e-6, 1 - 1e-6);
+    }
+
+    return clamp(blocks[blocks.length - 1].value, 1e-6, 1 - 1e-6);
+  }
+
+  return raw;
+}
+
+function buildCalibrationModel(labels) {
+  const directional = labels.filter((label) => {
+    const direction = label && label.prediction ? label.prediction.direction : "neutral";
+    const success = label && label.prediction ? label.prediction.success : null;
+    return (direction === "long" || direction === "short") && typeof success === "boolean";
+  });
+
+  const samples = directional
+    .map((label) => {
+      const direction = label.prediction.direction;
+      const score = label.prediction.score || null;
+      const rawProbability = direction === "long"
+        ? (score ? Number(score.long) : null)
+        : (score ? Number(score.short) : null);
+      if (!Number.isFinite(rawProbability)) {
+        return null;
+      }
+
+      return {
+        rawProbability,
+        target: label.prediction.success ? 1 : 0
+      };
+    })
+    .filter(Boolean);
+
+  if (samples.length < CALIBRATION_MIN_SAMPLES) {
+    return {
+      method: "none",
+      sampleSize: samples.length,
+      message: "Not enough samples for calibration"
+    };
+  }
+
+  const method = String(CALIBRATOR_METHOD || "platt").toLowerCase();
+  if (method === "isotonic") {
+    const model = fitIsotonicCalibrator(samples);
+    return model || {
+      method: "none",
+      sampleSize: samples.length,
+      message: "Failed to fit isotonic"
+    };
+  }
+
+  const model = fitPlattCalibrator(samples);
+  return model || {
+    method: "none",
+    sampleSize: samples.length,
+    message: "Failed to fit platt"
+  };
+}
+
+function buildRegimeQualityPayload(channel, limit) {
+  const channels = channel ? [channel] : Object.keys(state.seriesByChannel);
+  const labels = channels
+    .flatMap((name) => (state.seriesByChannel[name] ? state.seriesByChannel[name].labels : []))
+    .slice(-limit);
+
+  const directional = labels.filter((label) => {
+    const direction = label && label.prediction ? label.prediction.direction : "neutral";
+    const success = label && label.prediction ? label.prediction.success : null;
+    return (direction === "long" || direction === "short") && typeof success === "boolean";
+  });
+
+  const buckets = {
+    trend_high: [],
+    trend_low: [],
+    range_high: [],
+    range_low: []
+  };
+
+  for (const label of directional) {
+    const trend = label && label.regime ? label.regime.trend : "range";
+    const vol = label && label.regime ? label.regime.volatility : "low";
+    const key = `${trend}_${vol}`;
+    if (buckets[key]) {
+      buckets[key].push(label);
+    }
+  }
+
+  const regimes = Object.entries(buckets).map(([name, bucket]) => {
+    const wins = bucket.filter((label) => label.prediction.success).length;
+    const accuracy = bucket.length > 0 ? wins / bucket.length : null;
+    return {
+      regime: name,
+      sample: bucket.length,
+      wins,
+      losses: bucket.length - wins,
+      accuracy
+    };
+  });
+
+  const totalWins = directional.filter((label) => label.prediction.success).length;
+  const totalAccuracy = directional.length > 0 ? totalWins / directional.length : null;
+
+  return {
+    mode: "regime_quality",
+    channel: channel || "all",
+    requestedLabels: limit,
+    total: {
+      sample: directional.length,
+      wins: totalWins,
+      losses: directional.length - totalWins,
+      accuracy: totalAccuracy
+    },
+    regimes
   };
 }
 
@@ -503,14 +801,18 @@ function makeSignalFromFeature(feature) {
   const vol = Number.isFinite(feature.realizedVol) ? feature.realizedVol : 0;
   const spread = Number.isFinite(feature.spreadBps) ? feature.spreadBps : 0;
   const oi = Number.isFinite(feature.oiDelta) ? feature.oiDelta : 0;
+  const fundingZ = Number.isFinite(feature.fundingZScore) ? feature.fundingZScore : 0;
+  const basisBps = Number.isFinite(feature.basisBps) ? feature.basisBps : 0;
+  const ivRank = Number.isFinite(feature.ivRank) ? feature.ivRank : 0.5;
+  const ivSkew = Number.isFinite(feature.ivSkew) ? feature.ivSkew : 0;
 
   const spreadPenalty = Number.isFinite(spread) ? clamp((spread - 6) / 20, 0, 1.6) : 0.5;
   const volPenalty = clamp((vol - 0.008) / 0.03, 0, 1.4);
 
   const trendUnit = sigmoid((mFast * 170) + (mSlow * 120) - (z * 0.28));
   const flowUnit = sigmoid((Number.isFinite(feature.tickReturn) ? feature.tickReturn * 220 : 0) - spreadPenalty);
-  const derivUnit = sigmoid((oi / 9000) + (mSlow * 45));
-  const optionsUnit = 0.5;
+  const derivUnit = sigmoid((oi / 9000) + (mSlow * 45) - (Math.abs(fundingZ) * 0.42) - (Math.abs(basisBps) / 140));
+  const optionsUnit = sigmoid(((ivRank - 0.5) * 2.1) - (Math.abs(ivSkew) * 0.35));
   const riskUnit = clamp((volPenalty * 0.7) + (spreadPenalty * 0.3), 0, 1);
 
   const sTrend = unitToScore(trendUnit);
@@ -580,6 +882,11 @@ function makeSignalFromFeature(feature) {
   } else if (sDeriv <= 44) {
     reasons.push("Dérivés prudents (OI/basis proxy)");
   }
+  if (sOptions >= 56) {
+    reasons.push("Structure IV/skew favorable");
+  } else if (sOptions <= 44) {
+    reasons.push("Structure IV/skew défavorable");
+  }
   if (killSwitch.spreadTooWide) {
     reasons.push(`Kill-switch spread (${formatSigned(spread, 2)} bps)`);
   }
@@ -643,7 +950,11 @@ function makeSignalFromFeature(feature) {
       zScore: feature.zScore,
       realizedVol: feature.realizedVol,
       spreadBps: feature.spreadBps,
-      oiDelta: feature.oiDelta
+      oiDelta: feature.oiDelta,
+      fundingZScore: feature.fundingZScore,
+      basisBps: feature.basisBps,
+      ivRank: feature.ivRank,
+      ivSkew: feature.ivSkew
     },
     reasons: reasons.slice(0, 3)
   };
@@ -951,7 +1262,7 @@ function serveStaticAsset(res, urlPathname) {
   if (!assetPath) {
     sendJson(res, 404, {
       error: "Not Found",
-      message: "Use /health, /snapshot, /events, /candles, /analytics, /signal, /features, /labels, /series/schema, /backtest/rolling or /"
+      message: "Use /health, /snapshot, /events, /candles, /analytics, /signal, /features, /labels, /series/schema, /backtest/rolling, /quality/regime or /"
     });
     return;
   }
@@ -961,7 +1272,7 @@ function serveStaticAsset(res, urlPathname) {
       if (error.code === "ENOENT") {
         sendJson(res, 404, {
           error: "Not Found",
-          message: "Use /health, /snapshot, /events, /candles, /analytics, /signal, /features, /labels, /series/schema, /backtest/rolling or /"
+          message: "Use /health, /snapshot, /events, /candles, /analytics, /signal, /features, /labels, /series/schema, /backtest/rolling, /quality/regime or /"
         });
         return;
       }
@@ -1026,12 +1337,14 @@ function buildSignalPayload(channel) {
 
   const rolling = buildBacktestRollingPayload(selected, BACKTEST_DEFAULT_LABELS, 10);
   const reliability = rolling && rolling.metrics ? rolling.metrics.reliabilityScore : null;
+  const labelsForCalibration = state.seriesByChannel[selected]
+    ? state.seriesByChannel[selected].labels.slice(-CALIBRATION_LOOKBACK_LABELS)
+    : [];
+  const calibrationModel = buildCalibrationModel(labelsForCalibration);
   const rawDirectionalProbability = signal.direction === "long"
     ? signal.score.long
     : (signal.direction === "short" ? signal.score.short : 0.5);
-  const calibratedDirectionalProbability = Number.isFinite(reliability)
-    ? clamp((rawDirectionalProbability * 0.65) + (reliability * 0.35), 0, 1)
-    : rawDirectionalProbability;
+  const calibratedDirectionalProbability = applyCalibration(rawDirectionalProbability, calibrationModel);
 
   const riskView = signal.direction === "short" ? signal.risk.short : signal.risk.long;
   const decision = {
@@ -1051,7 +1364,13 @@ function buildSignalPayload(channel) {
     availableChannels,
     signal,
     decision,
-    reliability: rolling ? rolling.metrics : null
+    reliability: rolling ? rolling.metrics : null,
+    calibration: {
+      method: calibrationModel && calibrationModel.method ? calibrationModel.method : "none",
+      sampleSize: calibrationModel && Number.isFinite(calibrationModel.sampleSize) ? calibrationModel.sampleSize : 0,
+      rawProbability: rawDirectionalProbability,
+      calibratedProbability: calibratedDirectionalProbability
+    }
   };
 }
 
@@ -1329,9 +1648,20 @@ function startApiServer() {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/quality/regime") {
+      const channel = (url.searchParams.get("channel") || "").trim();
+      const labelsLimit = parseLimit(
+        url.searchParams.get("labels") || BACKTEST_DEFAULT_LABELS,
+        BACKTEST_DEFAULT_LABELS,
+        5000
+      );
+      sendJson(res, 200, buildRegimeQualityPayload(channel || null, labelsLimit));
+      return;
+    }
+
     sendJson(res, 404, {
       error: "Not Found",
-      message: "Use /health, /snapshot, /events, /candles, /analytics, /signal, /features, /labels, /series/schema or /backtest/rolling"
+      message: "Use /health, /snapshot, /events, /candles, /analytics, /signal, /features, /labels, /series/schema, /backtest/rolling or /quality/regime"
     });
   });
 

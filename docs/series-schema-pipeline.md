@@ -17,6 +17,13 @@
   - `bestAsk` (number|null)
   - `openInterest` (number|null)
   - `volume24h` (number|null)
+  - `fundingRate` (number|null)
+  - `funding8h` (number|null)
+  - `basisBps` (number|null)
+  - `markIv` (number|null)
+  - `bidIv` (number|null)
+  - `askIv` (number|null)
+  - `ivSkew` (number|null)
 
 ### 2) Série features
 - Fichier: `data/series_features.jsonl`
@@ -30,6 +37,13 @@
   - `realizedVol`
   - `spreadBps`
   - `oiDelta`
+  - `fundingRate`
+  - `fundingZScore`
+  - `basisBps`
+  - `basisDislocation`
+  - `ivMark`
+  - `ivRank`
+  - `ivSkew`
   - `windows.fast`, `windows.slow`
 
 ### 3) Série labels
@@ -44,6 +58,9 @@
   - `long.outcome` in `{tp, sl, timeout}`
   - `short.outcome` in `{tp, sl, timeout}`
   - `riskModel.slPct`, `riskModel.tpPct`
+  - `regime.trend` in `{trend, range}`
+  - `regime.volatility` in `{high, low}`
+  - `prediction.success` (bool) pour calibration
 
 ## Pipeline de calcul
 1. Ingestion tick Deribit (WebSocket).
@@ -65,10 +82,12 @@
 - `GET /labels?channel=...&limit=...`: labels récents
 - `GET /signal?channel=...`: signal actuel + probabilité + SL/TP
 - `GET /backtest/rolling?channel=...&labels=...`: accuracy rolling, coverage, reliability score
+- `GET /quality/regime?channel=...&labels=...`: qualité par régime trend/range et vol low/high
 
 ## Notes d'exploitation
 - Le signal est heuristique (`model: heuristic-v1`) et doit être calibré avec historique plus long.
 - Les labels permettent ensuite un apprentissage supervisé (calibration des probabilités).
+- Calibration probabiliste active via `CALIBRATOR_METHOD=platt|isotonic`.
 
 ## Cadre d'intégration étendu (Deribit + features)
 

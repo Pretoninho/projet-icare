@@ -107,6 +107,11 @@ Démarrage complet en local:
 - SCORE_WEIGHT_RISK: poids pénalité risque (défaut: 0.10)
 - KILL_SWITCH_MAX_SPREAD_BPS: spread max avant neutralisation (défaut: 24)
 - KILL_SWITCH_MAX_REALIZED_VOL: vol max avant neutralisation (défaut: 0.03)
+- CALIBRATOR_METHOD: calibrateur probabiliste (`platt` ou `isotonic`, défaut: platt)
+- CALIBRATION_LOOKBACK_LABELS: historique labels utilisé pour calibration (défaut: 800)
+- CALIBRATION_MIN_SAMPLES: minimum labels décisionnels pour calibrer (défaut: 60)
+- REGIME_TREND_THRESHOLD: seuil trend/range pour qualité par régime (défaut: 0.0035)
+- REGIME_VOL_HIGH_THRESHOLD: seuil vol high/low pour qualité par régime (défaut: 0.01)
 
 ## Exemple de lancement personnalisé
 DERIBIT_CHANNELS=ticker.BTC-PERPETUAL.100ms,ticker.ETH-PERPETUAL.100ms,ticker.SOL-PERPETUAL.100ms,deribit_price_index.btc_usd,deribit_price_index.eth_usd,deribit_price_index.sol_usd SNAPSHOT_INTERVAL_MS=10000 npm start

@@ -4,6 +4,7 @@ const appState = {
   candles: [],
   events: [],
   health: null,
+  regimeQuality: null,
   signal: null,
   snapshot: null,
   wsConnected: false
@@ -30,6 +31,11 @@ const refs = {
   metricStatus: document.getElementById("metric-status"),
   metricVolatility: document.getElementById("metric-volatility"),
   refreshButton: document.getElementById("refresh-button"),
+  regimeRangeHigh: document.getElementById("regime-range-high"),
+  regimeRangeLow: document.getElementById("regime-range-low"),
+  regimeSummary: document.getElementById("regime-summary"),
+  regimeTrendHigh: document.getElementById("regime-trend-high"),
+  regimeTrendLow: document.getElementById("regime-trend-low"),
   signalDirection: document.getElementById("signal-direction"),
   signalProbLong: document.getElementById("signal-prob-long"),
   signalProbShort: document.getElementById("signal-prob-short"),
@@ -362,6 +368,63 @@ function renderSignal() {
   refs.signalUpdatedAt.textContent = `Mis à jour: ${formatDate(signal.ts)}`;
 }
 
+function fillRegimeCard(cardRef, accuracy, sample) {
+  if (!cardRef) {
+    return;
+  }
+
+  const strong = cardRef.querySelector("strong");
+  const span = cardRef.querySelector("span");
+  if (strong) {
+    strong.textContent = formatProbability(accuracy);
+  }
+  if (span) {
+    span.textContent = Number.isFinite(sample) ? `Échantillon: ${sample}` : "Échantillon: --";
+  }
+}
+
+function renderRegimeQuality() {
+  const payload = appState.regimeQuality;
+  if (!payload || !Array.isArray(payload.regimes)) {
+    refs.regimeSummary.textContent = "Qualité: --";
+    fillRegimeCard(refs.regimeTrendHigh, null, null);
+    fillRegimeCard(refs.regimeTrendLow, null, null);
+    fillRegimeCard(refs.regimeRangeHigh, null, null);
+    fillRegimeCard(refs.regimeRangeLow, null, null);
+    return;
+  }
+
+  const byName = payload.regimes.reduce((acc, item) => {
+    acc[item.regime] = item;
+    return acc;
+  }, {});
+
+  fillRegimeCard(
+    refs.regimeTrendHigh,
+    byName.trend_high ? byName.trend_high.accuracy : null,
+    byName.trend_high ? byName.trend_high.sample : null
+  );
+  fillRegimeCard(
+    refs.regimeTrendLow,
+    byName.trend_low ? byName.trend_low.accuracy : null,
+    byName.trend_low ? byName.trend_low.sample : null
+  );
+  fillRegimeCard(
+    refs.regimeRangeHigh,
+    byName.range_high ? byName.range_high.accuracy : null,
+    byName.range_high ? byName.range_high.sample : null
+  );
+  fillRegimeCard(
+    refs.regimeRangeLow,
+    byName.range_low ? byName.range_low.accuracy : null,
+    byName.range_low ? byName.range_low.sample : null
+  );
+
+  const globalAcc = payload.total ? payload.total.accuracy : null;
+  const globalSample = payload.total ? payload.total.sample : null;
+  refs.regimeSummary.textContent = `Global: ${formatProbability(globalAcc)} (${Number.isFinite(globalSample) ? globalSample : "--"})`;
+}
+
 function renderCandles() {
   if (!appState.candles || appState.candles.error) {
     refs.candlesState.textContent = appState.candles && appState.candles.message
@@ -462,6 +525,7 @@ function renderAll() {
   renderSnapshot();
   renderAnalytics();
   renderSignal();
+  renderRegimeQuality();
   renderEvents();
   renderCandles();
   renderChart();
@@ -506,6 +570,12 @@ async function loadAnalyticsAndCandles() {
     appState.backtest = await fetchJson(`/backtest/rolling?channel=${channel}&labels=200&windows=10`);
   } catch (_error) {
     appState.backtest = null;
+  }
+
+  try {
+    appState.regimeQuality = await fetchJson(`/quality/regime?channel=${channel}&labels=300`);
+  } catch (_error) {
+    appState.regimeQuality = null;
   }
 }
 

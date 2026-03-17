@@ -336,6 +336,38 @@ button:hover {
   margin: 0;
 }
 
+.regime-panel {
+  border-color: rgba(122, 162, 255, 0.32);
+  background:
+    linear-gradient(125deg, rgba(26, 37, 58, 0.9), rgba(15, 24, 35, 0.9)),
+    radial-gradient(circle at 8% 82%, rgba(122, 162, 255, 0.13), transparent 40%);
+}
+
+.regime-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.regime-card {
+  margin: 0;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(122, 162, 255, 0.22);
+  background: rgba(11, 18, 29, 0.82);
+}
+
+.regime-card strong {
+  display: block;
+  font-size: 1.3rem;
+}
+
+.regime-card span {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.86rem;
+}
+
 .two-column {
   display: grid;
   grid-template-columns: 1.15fr 0.85fr;
@@ -464,6 +496,7 @@ td {
 
 @media (max-width: 1024px) {
   .metrics-grid,
+  .regime-grid,
   .signal-grid,
   .two-column,
   .controls-panel {
@@ -484,6 +517,7 @@ td {
 
   .hero,
   .metrics-grid,
+  .regime-grid,
   .signal-grid,
   .two-column,
   .controls-panel,
