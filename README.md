@@ -100,7 +100,11 @@ Démarrage complet en local:
 - ANALYTICS_DEFAULT_WINDOW_MS: fenêtre par défaut pour /analytics (défaut: 300000)
 
 ## Exemple de lancement personnalisé
-DERIBIT_CHANNELS=ticker.BTC-PERPETUAL.raw,ticker.ETH-PERPETUAL.raw SNAPSHOT_INTERVAL_MS=10000 npm start
+DERIBIT_CHANNELS=ticker.BTC-PERPETUAL.100ms,ticker.ETH-PERPETUAL.100ms,ticker.SOL-PERPETUAL.100ms,deribit_price_index.btc_usd,deribit_price_index.eth_usd,deribit_price_index.sol_usd SNAPSHOT_INTERVAL_MS=10000 npm start
+
+Exemple multi-instruments (6 canaux):
+
+DERIBIT_CHANNELS=ticker.BTC-PERPETUAL.100ms,ticker.ETH-PERPETUAL.100ms,ticker.SOL-PERPETUAL.100ms,deribit_price_index.btc_usd,deribit_price_index.eth_usd,deribit_price_index.sol_usd npm start
 
 Exemple avec TimescaleDB local:
 
