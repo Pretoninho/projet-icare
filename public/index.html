@@ -4,11 +4,18 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#0b0f17">
+    <meta name="description" content="Console PWA iCare pour supervision Deribit en temps réel, analytics et alertes push.">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>iCare Live Console</title>
     <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="icon" href="/assets/icons/icon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/assets/styles.css">
   </head>
   <body>
+    <a class="skip-link" href="#main-content">Aller au contenu principal</a>
+    <div class="sr-only" id="live-region" role="status" aria-live="polite" aria-atomic="true"></div>
     <div class="page-shell">
       <header class="hero">
         <div class="brand-wrap">
@@ -19,7 +26,7 @@
           </p>
         </div>
         <div class="hero-side">
-          <div class="status-pill" id="connection-pill">Initialisation</div>
+          <div class="status-pill" id="connection-pill" role="status" aria-live="polite">Initialisation</div>
           <div class="hero-meta">
             <span id="ws-indicator">WS local: en attente</span>
             <span id="last-sync">Dernière synchro: --</span>
@@ -27,15 +34,15 @@
         </div>
       </header>
 
-      <main class="dashboard">
+      <main class="dashboard" id="main-content" tabindex="-1">
         <section class="panel controls-panel">
           <div>
-            <p class="section-label">Instrument observé</p>
-            <select id="channel-select"></select>
+            <label class="section-label" for="channel-select">Instrument observé</label>
+            <select id="channel-select" aria-label="Sélection de l'instrument observé"></select>
           </div>
           <div>
-            <p class="section-label">Fenêtre analytics</p>
-            <select id="window-select">
+            <label class="section-label" for="window-select">Fenêtre analytics</label>
+            <select id="window-select" aria-label="Sélection de la fenêtre analytics">
               <option value="60000">1 minute</option>
               <option value="300000" selected>5 minutes</option>
               <option value="900000">15 minutes</option>
@@ -56,8 +63,8 @@
           <div class="notification-controls">
             <button id="notification-toggle" type="button">Activer les notifications</button>
             <div>
-              <p class="section-label">Seuil probabilité</p>
-              <select id="notification-threshold">
+              <label class="section-label" for="notification-threshold">Seuil probabilité</label>
+              <select id="notification-threshold" aria-label="Seuil minimal de probabilité pour alerte">
                 <option value="0.55">55 %</option>
                 <option value="0.60" selected>60 %</option>
                 <option value="0.65">65 %</option>
@@ -65,15 +72,15 @@
               </select>
             </div>
             <div>
-              <p class="section-label">Cooldown</p>
-              <select id="notification-cooldown">
+              <label class="section-label" for="notification-cooldown">Cooldown</label>
+              <select id="notification-cooldown" aria-label="Durée de cooldown entre notifications">
                 <option value="300000" selected>5 min</option>
                 <option value="900000">15 min</option>
                 <option value="1800000">30 min</option>
               </select>
             </div>
           </div>
-          <ul class="notification-log" id="notification-log">
+          <ul class="notification-log" id="notification-log" role="log" aria-live="polite" aria-relevant="additions">
             <li class="muted">Alerte: aucun événement pour le moment.</li>
           </ul>
         </section>
@@ -179,7 +186,7 @@
             </div>
             <div class="legend-chip">Tick tape</div>
           </div>
-          <canvas id="price-chart" width="960" height="260" aria-label="Graphique des prix"></canvas>
+          <canvas id="price-chart" width="960" height="260" role="img" aria-label="Graphique des prix"></canvas>
         </section>
 
         <section class="two-column">
@@ -193,6 +200,7 @@
             </div>
             <div class="table-wrap">
               <table>
+                <caption class="sr-only">Snapshot des derniers prix reçus par canal</caption>
                 <thead>
                   <tr>
                     <th>Canal</th>
@@ -230,7 +238,7 @@
               </div>
               <div class="legend-chip">Buffer local</div>
             </div>
-            <div class="event-stream" id="event-stream"></div>
+            <div class="event-stream" id="event-stream" role="log" aria-live="polite" aria-relevant="additions text"></div>
           </article>
 
           <article class="panel candles-panel">
@@ -241,9 +249,10 @@
               </div>
               <div class="legend-chip">TimescaleDB</div>
             </div>
-            <div id="candles-state" class="empty-state">Chargement...</div>
+            <div id="candles-state" class="empty-state" role="status" aria-live="polite">Chargement...</div>
             <div class="table-wrap hidden" id="candles-table-wrap">
               <table>
+                <caption class="sr-only">Bougies OHLC issues de TimescaleDB</caption>
                 <thead>
                   <tr>
                     <th>Bucket</th>

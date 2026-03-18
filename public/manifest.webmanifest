@@ -2,9 +2,45 @@
   "name": "iCare Live Console",
   "short_name": "iCare",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "orientation": "portrait-primary",
   "background_color": "#0b0f17",
   "theme_color": "#0b0f17",
   "lang": "fr",
-  "description": "Console live de supervision Deribit avec alertes et notifications push."
+  "description": "Console live de supervision Deribit avec alertes, analytics et notifications push.",
+  "icons": [
+    {
+      "src": "/assets/icons/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/assets/icons/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/assets/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Santé du service",
+      "short_name": "Santé",
+      "description": "Ouvre la console et vérifie la connectivité.",
+      "url": "/?view=health"
+    },
+    {
+      "name": "Signal tactique",
+      "short_name": "Signal",
+      "description": "Ouvre directement la section signal.",
+      "url": "/?view=signal"
+    }
+  ]
 }

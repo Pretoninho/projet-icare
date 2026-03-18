@@ -64,9 +64,21 @@ const refs = {
   snapshotGeneratedAt: document.getElementById("snapshot-generated-at"),
   snapshotTableBody: document.getElementById("snapshot-table-body"),
   topChannelList: document.getElementById("top-channel-list"),
+  liveRegion: document.getElementById("live-region"),
   windowSelect: document.getElementById("window-select"),
   wsIndicator: document.getElementById("ws-indicator")
 };
+
+function announce(message) {
+  if (!refs.liveRegion || !message) {
+    return;
+  }
+
+  refs.liveRegion.textContent = "";
+  window.requestAnimationFrame(() => {
+    refs.liveRegion.textContent = message;
+  });
+}
 
 function getSelectedChannel() {
   return refs.channelSelect.value || "";
@@ -193,8 +205,10 @@ async function registerServiceWorker() {
   try {
     const registration = await navigator.serviceWorker.register("/sw.js");
     appState.notifications.swRegistration = registration;
+    announce("Service worker activé pour le mode hors ligne.");
     return registration;
   } catch (_error) {
+    announce("Impossible d'activer le mode hors ligne.");
     return null;
   }
 }
@@ -855,11 +869,13 @@ function connectLocalWebSocket() {
   socket.addEventListener("open", () => {
     appState.wsConnected = true;
     renderHealth();
+    announce("WebSocket local connecté.");
   });
 
   socket.addEventListener("close", () => {
     appState.wsConnected = false;
     renderHealth();
+    announce("WebSocket local déconnecté. Reconnexion en cours.");
     window.setTimeout(connectLocalWebSocket, 1500);
   });
 
@@ -896,6 +912,10 @@ async function refreshDashboard() {
     await loadHealthAndSnapshot();
     await loadAnalyticsAndCandles();
     renderAll();
+    announce("Tableau de bord mis à jour.");
+  } catch (_error) {
+    pushNotificationLog("system", "Échec de synchronisation: vérifie la connexion réseau.");
+    announce("Synchronisation impossible. Connexion réseau indisponible ou API injoignable.");
   } finally {
     refs.refreshButton.disabled = false;
   }
@@ -929,6 +949,7 @@ refs.notificationToggle.addEventListener("click", async () => {
     await removePushSubscription();
     persistNotificationPreferences();
     updateNotificationStatus();
+    announce("Notifications désactivées.");
     return;
   }
 
@@ -946,6 +967,7 @@ refs.notificationToggle.addEventListener("click", async () => {
   persistNotificationPreferences();
   updateNotificationStatus();
   pushNotificationLog("system", "Notifications activées");
+  announce("Notifications activées.");
 });
 
 window.addEventListener("load", async () => {
@@ -962,6 +984,18 @@ window.addEventListener("load", async () => {
   window.setInterval(() => {
     loadAnalyticsAndCandles()
       .then(renderAll)
-      .catch(() => {});
+      .catch(() => {
+        announce("Mise à jour périodique indisponible en ce moment.");
+      });
   }, 10000);
+});
+
+window.addEventListener("online", () => {
+  announce("Connexion rétablie.");
+  refreshDashboard();
+});
+
+window.addEventListener("offline", () => {
+  pushNotificationLog("system", "Mode hors ligne actif: données servies depuis le cache quand disponible.");
+  announce("Mode hors ligne actif.");
 });

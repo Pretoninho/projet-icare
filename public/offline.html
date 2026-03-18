@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0b0f17">
+    <title>iCare - Hors ligne</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+        background:
+          radial-gradient(circle at 16% 8%, rgba(122, 162, 255, 0.25), transparent 28%),
+          linear-gradient(180deg, #0b1019 0%, #0b0f17 54%, #080c13 100%);
+        color: #d9e2f2;
+      }
+
+      main {
+        width: min(620px, calc(100% - 30px));
+        border: 1px solid rgba(122, 162, 255, 0.28);
+        border-radius: 16px;
+        padding: 22px;
+        background: rgba(12, 20, 33, 0.9);
+      }
+
+      h1 {
+        margin: 0 0 12px;
+        font-family: "IBM Plex Mono", "Cascadia Mono", monospace;
+      }
+
+      p {
+        margin: 0 0 10px;
+        color: #aebbd3;
+        line-height: 1.5;
+      }
+
+      a {
+        color: #9bb9ff;
+      }
+    </style>
+  </head>
+  <body>
+    <main role="main" aria-labelledby="offline-title">
+      <h1 id="offline-title">Mode hors ligne</h1>
+      <p>La console iCare est indisponible en réseau pour le moment.</p>
+      <p>Les ressources de l'application restent accessibles, et certaines réponses API peuvent être servies depuis le cache local.</p>
+      <p>Dès que la connexion revient, recharge la page principale: <a href="/">ouvrir iCare</a>.</p>
+    </main>
+  </body>
+</html>

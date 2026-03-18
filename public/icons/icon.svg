@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="iCare">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#13233c"/>
+      <stop offset="100%" stop-color="#0a111d"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7aa2ff"/>
+      <stop offset="100%" stop-color="#2ecc8f"/>
+    </linearGradient>
+  </defs>
+  <rect x="32" y="32" width="448" height="448" rx="108" fill="url(#bg)"/>
+  <circle cx="256" cy="256" r="146" fill="none" stroke="url(#ring)" stroke-width="34"/>
+  <path d="M176 278c26-40 58-62 92-62 26 0 46 11 68 28" fill="none" stroke="#f5b84d" stroke-width="24" stroke-linecap="round"/>
+  <circle cx="214" cy="226" r="14" fill="#d9e2f2"/>
+  <circle cx="314" cy="226" r="14" fill="#d9e2f2"/>
+  <text x="256" y="412" text-anchor="middle" font-size="84" fill="#d9e2f2" font-family="IBM Plex Mono, Segoe UI, sans-serif">iC</text>
+</svg>
