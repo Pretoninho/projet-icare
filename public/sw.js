@@ -1,4 +1,4 @@
-const CACHE_VERSION = "icare-v2";
+const CACHE_VERSION = "icare-v3-production";
 const APP_SHELL = [
   "/",
   "/manifest.webmanifest",

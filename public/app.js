@@ -464,7 +464,13 @@ function drawReliabilitySparkline(history) {
 }
 
 async function fetchJson(url) {
-  const response = await fetch(url);
+  // Add cache-buster for API requests
+  const separator = url.includes("?") ? "&" : "?";
+  const cacheBusterUrl = `${url}${separator}_t=${Date.now()}`;
+  
+  const response = await fetch(cacheBusterUrl, {
+    cache: "no-store"  // Force fresh from server
+  });
   const payload = await response.json();
   if (!response.ok) {
     throw new Error(payload.message || `HTTP ${response.status}`);
