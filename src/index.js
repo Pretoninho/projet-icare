@@ -2088,9 +2088,96 @@ function startApiServer() {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/export") {
+      const format = (url.searchParams.get("format") || "jsonl").toLowerCase();
+      const channels = (url.searchParams.get("channels") || "").split(",").filter(Boolean);
+      
+      let exportData = "";
+      if (format === "json") {
+        const payload = {
+          exportedAt: new Date().toISOString(),
+          channels: channels.length > 0 ? channels : Object.keys(state.seriesByChannel),
+          data: {}
+        };
+        
+        (channels.length > 0 ? channels : Object.keys(state.seriesByChannel)).forEach((ch) => {
+          if (state.seriesByChannel[ch]) {
+            payload.data[ch] = {
+              market: state.seriesByChannel[ch].market || [],
+              features: state.seriesByChannel[ch].features || [],
+              labels: state.seriesByChannel[ch].labels || []
+            };
+          }
+        });
+        exportData = JSON.stringify(payload, null, 2);
+      } else {
+        const allChannels = channels.length > 0 ? channels : Object.keys(state.seriesByChannel);
+        const allMarket = [];
+        const allFeatures = [];
+        const allLabels = [];
+        
+        allChannels.forEach((ch) => {
+          if (state.seriesByChannel[ch]) {
+            if (state.seriesByChannel[ch].market) allMarket.push(...state.seriesByChannel[ch].market);
+            if (state.seriesByChannel[ch].features) allFeatures.push(...state.seriesByChannel[ch].features);
+            if (state.seriesByChannel[ch].labels) allLabels.push(...state.seriesByChannel[ch].labels);
+          }
+        });
+        
+        exportData = "# MARKET POINTS\n" +
+          allMarket.map((m) => JSON.stringify(m)).join("\n") +
+          "\n# FEATURES\n" +
+          allFeatures.map((f) => JSON.stringify(f)).join("\n") +
+          "\n# LABELS\n" +
+          allLabels.map((l) => JSON.stringify(l)).join("\n");
+      }
+      
+      const contentType = format === "json" ? "application/json" : "text/plain";
+      const filename = `icare-export-${new Date().toISOString().split("T")[0]}.${format === "json" ? "json" : "txt"}`;
+      
+      res.writeHead(200, {
+        "Content-Type": contentType,
+        "Content-Disposition": `attachment; filename="${filename}"`,
+        "Content-Length": Buffer.byteLength(exportData)
+      });
+      res.end(exportData);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/summary") {
+      const summaryData = {
+        exportedAt: new Date().toISOString(),
+        channels: {},
+        global: {
+          totalLabels: 0,
+          totalAccuracy: null,
+          regimeQualities: {}
+        }
+      };
+      
+      Object.keys(state.seriesByChannel).forEach((ch) => {
+        const series = state.seriesByChannel[ch];
+        const labels = series && series.labels ? series.labels : [];
+        const metrics = computeBacktestMetrics(labels);
+        
+        summaryData.channels[ch] = {
+          labels: labels.length,
+          metrics
+        };
+        summaryData.global.totalLabels += labels.length;
+      });
+      
+      const regimePayload = buildRegimeQualityPayload(null, 500);
+      summaryData.global.totalAccuracy = regimePayload.total.accuracy;
+      summaryData.global.regimeQualities = regimePayload.regimes;
+      
+      sendJson(res, 200, summaryData);
+      return;
+    }
+
     sendJson(res, 404, {
       error: "Not Found",
-      message: "Use /health, /snapshot, /events, /candles, /analytics, /signal, /features, /labels, /series/schema, /backtest/rolling, /quality/regime, /notifications, /push/status, /push/public-key, /push/subscribe or /push/unsubscribe"
+      message: "Use /health, /snapshot, /events, /candles, /analytics, /signal, /features, /labels, /series/schema, /backtest/rolling, /quality/regime, /export, /summary, /notifications, /push/status, /push/public-key, /push/subscribe or /push/unsubscribe"
     });
   });
 
