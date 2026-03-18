@@ -2216,6 +2216,62 @@ function connect() {
   });
 }
 
+function loadSeriesFromFile(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) {
+      return [];
+    }
+    const raw = fs.readFileSync(filePath, "utf8");
+    const lines = raw.split("\n").filter(Boolean);
+    return lines.map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch (_error) {
+        return null;
+      }
+    }).filter(Boolean);
+  } catch (error) {
+    log(`Chargement ${path.basename(filePath)} en echec`, error.message);
+    return [];
+  }
+}
+
+function loadHistoricalSeries() {
+  log("Chargement des séries historiques...");
+  const labels = loadSeriesFromFile(labelsSeriesPath);
+  const features = loadSeriesFromFile(featuresSeriesPath);
+  const market = loadSeriesFromFile(deribitSeriesPath);
+  const channelsSet = new Set();
+  labels.forEach((label) => {
+    if (label && label.channel) {
+      channelsSet.add(label.channel);
+    }
+  });
+  features.forEach((feature) => {
+    if (feature && feature.channel) {
+      channelsSet.add(feature.channel);
+    }
+  });
+  market.forEach((point) => {
+    if (point && point.channel) {
+      channelsSet.add(point.channel);
+    }
+  });
+  channelsSet.forEach((channel) => {
+    ensureSeriesState(channel);
+    const channelMarket = market.filter((m) => m && m.channel === channel);
+    const channelFeatures = features.filter((f) => f && f.channel === channel);
+    const channelLabels = labels.filter((l) => l && l.channel === channel);
+    state.seriesByChannel[channel].market = channelMarket;
+    state.seriesByChannel[channel].features = channelFeatures;
+    state.seriesByChannel[channel].labels = channelLabels;
+  });
+  const totalLabels = labels.length;
+  const totalChannels = channelsSet.size;
+  log(`Historique chargé: ${totalLabels} labels sur ${totalChannels} canaux`);
+  return { labels: totalLabels, channels: totalChannels };
+}
+
 setInterval(writeSnapshot, SNAPSHOT_INTERVAL_MS);
 
 setInterval(() => {
@@ -2226,6 +2282,7 @@ setInterval(() => {
   }
 }, 10000);
 
+loadHistoricalSeries();
 setupDatabase().finally(() => {
   setupWebPush();
   startApiServer();
