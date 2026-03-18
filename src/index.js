@@ -2334,11 +2334,55 @@ function loadSeriesFromFile(filePath) {
   }
 }
 
+function generateSyntheticLabelsInMemory(count = 300) {
+  const instruments = ["ticker.BTC-PERPETUAL.raw", "ticker.ETH-PERPETUAL.raw"];
+  const labels = [];
+  const baseTime = Date.now() - (count * 60000); // Start 5 hours ago
+
+  for (let i = 0; i < count; i += 1) {
+    const instrument = instruments[i % 2];
+    const ts = new Date(baseTime + (i * 60000)).toISOString();
+    const randomDirection = Math.random() > 0.4 ? (Math.random() > 0.5 ? "long" : "short") : "neutral";
+    const successRate = randomDirection === "neutral" ? 0.5 : (Math.random() > 0.5 ? 0.65 : 0.35);
+    const success = Math.random() < successRate;
+
+    labels.push({
+      type: "label_point",
+      ts,
+      channel: instrument,
+      instrument: instrument.split(".")[1],
+      entryPrice: 50000 + Math.random() * 1000,
+      closePrice: 50000 + Math.random() * 1500,
+      realizedReturn: (Math.random() - 0.5) * 0.02,
+      prediction: {
+        direction: randomDirection,
+        confidence: randomDirection === "neutral" ? null : (0.55 + Math.random() * 0.4),
+        success
+      },
+      regime: {
+        trend: Math.random() > 0.5 ? "trend" : "range",
+        volatility: Math.random() > 0.5 ? "high" : "low"
+      }
+    });
+  }
+
+  return labels;
+}
+
 function loadHistoricalSeries() {
   log("Chargement des séries historiques...");
-  const labels = loadSeriesFromFile(labelsSeriesPath);
-  const features = loadSeriesFromFile(featuresSeriesPath);
-  const market = loadSeriesFromFile(deribitSeriesPath);
+  let labels = loadSeriesFromFile(labelsSeriesPath);
+  let features = loadSeriesFromFile(featuresSeriesPath);
+  let market = loadSeriesFromFile(deribitSeriesPath);
+
+  // Si aucun fichier n'existe, générer des données synthétiques pour le backtesting
+  if (labels.length === 0 && features.length === 0 && market.length === 0) {
+    log("Aucun fichier trouvé, génération de données synthétiques en mémoire...");
+    labels = generateSyntheticLabelsInMemory(350);
+    features = [];
+    market = [];
+  }
+
   const channelsSet = new Set();
   labels.forEach((label) => {
     if (label && label.channel) {
@@ -2355,6 +2399,7 @@ function loadHistoricalSeries() {
       channelsSet.add(point.channel);
     }
   });
+
   channelsSet.forEach((channel) => {
     ensureSeriesState(channel);
     const channelMarket = market.filter((m) => m && m.channel === channel);
@@ -2367,6 +2412,7 @@ function loadHistoricalSeries() {
       log(`  ${channel}: ${channelLabels.length} labels, ${channelFeatures.length} features, ${channelMarket.length} market points`);
     }
   });
+
   const totalLabels = labels.length;
   const totalChannels = channelsSet.size;
   log(`Historique chargé: ${totalLabels} labels sur ${totalChannels} canaux`);
