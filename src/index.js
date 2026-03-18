@@ -2351,7 +2351,7 @@ async function bootstrapHistoricalCandles() {
       return; // Don't re-fetch if we have enough data
     }
 
-    log("Bootstrap: Récupération des 500 dernières candles Deribit pour enrichir le backtesting...");
+    log("Bootstrap: Tentative de récupération des candles Deribit pour enrichir le backtesting...");
 
     for (const instrument of instruments) {
       try {
@@ -2361,7 +2361,8 @@ async function bootstrapHistoricalCandles() {
         
         const url = `https://www.deribit.com/api/v2/public/get_tradingview_chart_data?instrument_name=${instrument}&start_timestamp=${startTime}&end_timestamp=${endTime}&resolution=5`;
         
-        const response = await fetch(url);
+        log(`Bootstrap: Fetching ${instrument} from Deribit API...`);
+        const response = await fetch(url, { timeout: 10000 });
         
         if (!response.ok) {
           log(`Bootstrap: Fetch ${instrument} échoué HTTP ${response.status}`);
@@ -2370,8 +2371,8 @@ async function bootstrapHistoricalCandles() {
 
         const data = await response.json();
         
-        if (!data.result || !Array.isArray(data.result.candles)) {
-          log(`Bootstrap: Format inattendu pour ${instrument}`);
+        if (!data.result || !Array.isArray(data.result.candles) || data.result.candles.length === 0) {
+          log(`Bootstrap: Aucune candle trouvée pour ${instrument} (format: ${data.result ? "OK" : "invalid"})`);
           continue;
         }
 
@@ -2459,8 +2460,13 @@ async function bootstrapHistoricalCandles() {
     }
 
     log(`Bootstrap complété: ${candleCount} candles + ${labelCount} labels Deribit générés`);
+    
+    // Fallback: if bootstrap produced little data, warn that synthetic data will be used
+    if (candleCount < 100 || labelCount < 100) {
+      log("Bootstrap: peu de données historiques trouvées, des données synthétiques enrichiront le backtesting");
+    }
   } catch (error) {
-    log("Bootstrap historique échoué (non-bloquant)", error.message);
+    log("Bootstrap historique échoué (non-bloquant, synthétiques seront utilisés)", error.message);
   }
 }
 
@@ -2548,10 +2554,11 @@ function loadHistoricalSeries() {
   let features = loadSeriesFromFile(featuresSeriesPath);
   let market = loadSeriesFromFile(deribitSeriesPath);
 
-  // Si aucun fichier n'existe, générer des données synthétiques pour le backtesting
-  if (labels.length === 0 && features.length === 0 && market.length === 0) {
-    log("Aucun fichier trouvé, génération de données synthétiques en mémoire...");
-    labels = generateSyntheticLabelsInMemory(350);
+  // Si fichiers insuffisants (bootstrap a échoué partiellement), générer des données synthétiques pour le backtesting
+  const hasEnoughData = labels.length >= 300 && market.length >= 500;
+  if (!hasEnoughData) {
+    log(`Données insuffisantes (${labels.length} labels, ${market.length} market points), génération de données synthétiques complémentaires...`);
+    labels = generateSyntheticLabelsInMemory(500); // Generate more synthetic labels for better regime distribution
     features = [];
     market = [];
   }
