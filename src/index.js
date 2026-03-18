@@ -886,6 +886,17 @@ function buildRegimeQualityPayload(channel, limit) {
   const labels = channels
     .flatMap((name) => (state.seriesByChannel[name] ? state.seriesByChannel[name].labels : []))
     .slice(-limit);
+  
+  // Debug logging
+  const debug = process.env.DEBUG_BACKTEST === "true";
+  if (debug) {
+    log(`buildRegimeQualityPayload DEBUG - channel: ${channel}, limit: ${limit}, channels found: ${channels.length}`);
+    channels.forEach(ch => {
+      const cnt = state.seriesByChannel[ch] ? (state.seriesByChannel[ch].labels ? state.seriesByChannel[ch].labels.length : 0) : 0;
+      log(`  ${ch}: ${cnt} labels`);
+    });
+    log(`  Total labels collected: ${labels.length}`);
+  }
 
   const directional = labels.filter((label) => {
     const direction = label && label.prediction ? label.prediction.direction : "neutral";
@@ -2265,10 +2276,16 @@ function loadHistoricalSeries() {
     state.seriesByChannel[channel].market = channelMarket;
     state.seriesByChannel[channel].features = channelFeatures;
     state.seriesByChannel[channel].labels = channelLabels;
+    if (process.env.DEBUG_BACKTEST === "true") {
+      log(`  ${channel}: ${channelLabels.length} labels, ${channelFeatures.length} features, ${channelMarket.length} market points`);
+    }
   });
   const totalLabels = labels.length;
   const totalChannels = channelsSet.size;
   log(`Historique chargé: ${totalLabels} labels sur ${totalChannels} canaux`);
+  if (process.env.DEBUG_BACKTEST === "true") {
+    log(`Channels in state.seriesByChannel: ${Object.keys(state.seriesByChannel).join(", ")}`);
+  }
   return { labels: totalLabels, channels: totalChannels };
 }
 
