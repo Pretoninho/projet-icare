@@ -60,8 +60,9 @@ const channels = process.env.DERIBIT_CHANNELS
   ? process.env.DERIBIT_CHANNELS.split(",").map((channel) => channel.trim()).filter(Boolean)
   : DEFAULT_CHANNELS;
 
-const dataDir = path.join(process.cwd(), "data");
-const publicDir = path.join(process.cwd(), "public");
+const projectRoot = path.join(__dirname, "..");
+const dataDir = path.join(projectRoot, "data");
+const publicDir = path.join(projectRoot, "public");
 const eventsPath = path.join(dataDir, "events.jsonl");
 const snapshotPath = path.join(dataDir, "snapshot.json");
 const deribitSeriesPath = path.join(dataDir, DERIBIT_SERIES_PATH);
