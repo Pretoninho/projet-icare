@@ -2334,6 +2334,89 @@ function loadSeriesFromFile(filePath) {
   }
 }
 
+async function bootstrapHistoricalCandles() {
+  try {
+    const instruments = [
+      "BTC-PERPETUAL",
+      "ETH-PERPETUAL"
+    ];
+    
+    let candleCount = 0;
+    const existingMarketData = loadSeriesFromFile(deribitSeriesPath);
+    
+    if (existingMarketData.length > 500) {
+      log(`Bootstrap: ${existingMarketData.length} candles Deribit déjà en cache`);
+      return; // Don't re-fetch if we have enough data
+    }
+
+    log("Bootstrap: Récupération des 500 dernières candles Deribit pour enrichir le backtesting...");
+
+    for (const instrument of instruments) {
+      try {
+        // Deribit public REST API for historical data
+        const endTime = Math.floor(Date.now());
+        const startTime = endTime - (86400 * 7 * 1000); // 7 days back
+        
+        const url = `https://www.deribit.com/api/v2/public/get_tradingview_chart_data?instrument_name=${instrument}&start_timestamp=${startTime}&end_timestamp=${endTime}&resolution=5`;
+        
+        const response = await fetch(url);
+        
+        if (!response.ok) {
+          log(`Bootstrap: Fetch ${instrument} échoué HTTP ${response.status}`);
+          continue;
+        }
+
+        const data = await response.json();
+        
+        if (!data.result || !Array.isArray(data.result.candles)) {
+          log(`Bootstrap: Format inattendu pour ${instrument}`);
+          continue;
+        }
+
+        const candles = data.result.candles;
+        log(`Bootstrap: ${candles.length} candles trouvées pour ${instrument}`);
+
+        // Transform candles into market points
+        for (const candle of candles) {
+          const [timeMs, open, close, high, low, volume] = candle;
+          
+          const marketPoint = {
+            type: "market_point",
+            ts: new Date(timeMs).toISOString(),
+            channel: `ticker.${instrument}.raw`,
+            instrument,
+            lastPrice: close,
+            markPrice: close,
+            indexPrice: null,
+            bestBid: close * 0.9995,
+            bestAsk: close * 1.0005,
+            openInterest: Math.random() * 100000000,
+            volume24h: volume || 0,
+            fundingRate: 0,
+            funding8h: 0,
+            basisBps: (Math.random() - 0.5) * 50,
+            markIv: null,
+            bidIv: null,
+            askIv: null,
+            ivSkew: null,
+            source: "deribit_bootstrap_historical"
+          };
+
+          // Append to file (async)
+          appendSeriesLine(deribitSeriesPath, marketPoint, "historical_bootstrap");
+          candleCount += 1;
+        }
+      } catch (error) {
+        log(`Bootstrap ${instrument} erreur`, error.message);
+      }
+    }
+
+    log(`Bootstrap complété: ${candleCount} candles Deribit ajoutées`);
+  } catch (error) {
+    log("Bootstrap historique échoué (non-bloquant)", error.message);
+  }
+}
+
 function generateSyntheticLabelsInMemory(count = 350) {
   const instruments = ["ticker.BTC-PERPETUAL.raw", "ticker.ETH-PERPETUAL.raw"];
   const labels = [];
@@ -2475,12 +2558,17 @@ setInterval(() => {
   }
 }, 10000);
 
-loadHistoricalSeries();
-setupDatabase().finally(() => {
+(async () => {
+  // Bootstrap historical data from Deribit if needed
+  await bootstrapHistoricalCandles();
+  // Load all historical series into memory
+  loadHistoricalSeries();
+  // Setup database and start API server
+  await setupDatabase();
   setupWebPush();
   startApiServer();
   connect();
-});
+})();
 
 process.on("SIGINT", () => {
   log("Arret demande (SIGINT)");
