@@ -2334,34 +2334,77 @@ function loadSeriesFromFile(filePath) {
   }
 }
 
-function generateSyntheticLabelsInMemory(count = 300) {
+function generateSyntheticLabelsInMemory(count = 350) {
   const instruments = ["ticker.BTC-PERPETUAL.raw", "ticker.ETH-PERPETUAL.raw"];
   const labels = [];
-  const baseTime = Date.now() - (count * 60000); // Start 5 hours ago
+  const baseTime = Date.now() - (count * 60000); // Start 5+ hours ago
+  
+  // Realistic regime patterns with different success rates
+  const regimes = [
+    { trend: "trend", volatility: "high", longSuccessRate: 0.65, shortSuccessRate: 0.45, neutralRate: 0.15 },
+    { trend: "trend", volatility: "low", longSuccessRate: 0.48, shortSuccessRate: 0.48, neutralRate: 0.30 },
+    { trend: "range", volatility: "high", longSuccessRate: 0.38, shortSuccessRate: 0.38, neutralRate: 0.25 },
+    { trend: "range", volatility: "low", longSuccessRate: 0.55, shortSuccessRate: 0.55, neutralRate: 0.35 }
+  ];
 
   for (let i = 0; i < count; i += 1) {
     const instrument = instruments[i % 2];
     const ts = new Date(baseTime + (i * 60000)).toISOString();
-    const randomDirection = Math.random() > 0.4 ? (Math.random() > 0.5 ? "long" : "short") : "neutral";
-    const successRate = randomDirection === "neutral" ? 0.5 : (Math.random() > 0.5 ? 0.65 : 0.35);
+    
+    // Regime cycles (repeat patterns)
+    const regimeIndex = Math.floor((i / 40) % regimes.length);
+    const regime = regimes[regimeIndex];
+    
+    // Directional bias: trend regimes favor direction, range regimes more neutral
+    let direction = "neutral";
+    let successRate = 0.5;
+    
+    const dirRandom = Math.random();
+    if (dirRandom < (1 - regime.neutralRate)) {
+      direction = dirRandom < (1 - regime.neutralRate) / 2 ? "long" : "short";
+      successRate = direction === "long" ? regime.longSuccessRate : regime.shortSuccessRate;
+    } else {
+      successRate = regime.neutralRate;
+    }
+    
+    // More realistic success: some directions have better win rates
     const success = Math.random() < successRate;
-
+    
+    // More realistic price movements
+    const basePriceByInstrument = instrument.includes("BTC") ? 74000 : 3500;
+    const entryPrice = basePriceByInstrument * (1 + (Math.random() - 0.5) * 0.02);
+    const returnPct = (Math.random() - 0.5) * (direction === "neutral" ? 0.015 : 0.025);
+    const closePrice = entryPrice * (1 + returnPct);
+    
     labels.push({
       type: "label_point",
       ts,
       channel: instrument,
       instrument: instrument.split(".")[1],
-      entryPrice: 50000 + Math.random() * 1000,
-      closePrice: 50000 + Math.random() * 1500,
-      realizedReturn: (Math.random() - 0.5) * 0.02,
-      prediction: {
-        direction: randomDirection,
-        confidence: randomDirection === "neutral" ? null : (0.55 + Math.random() * 0.4),
-        success
+      entryPrice,
+      closePrice,
+      realizedReturn: (closePrice - entryPrice) / entryPrice,
+      featureTs: new Date(Date.parse(ts) - 60000).toISOString(),
+      horizonPoints: 15,
+      long: {
+        outcome: success && direction === "long" ? "tp" : "sl",
+        success: success && direction === "long"
       },
-      regime: {
-        trend: Math.random() > 0.5 ? "trend" : "range",
-        volatility: Math.random() > 0.5 ? "high" : "low"
+      short: {
+        outcome: success && direction === "short" ? "tp" : "sl",
+        success: success && direction === "short"
+      },
+      riskModel: {
+        slPct: 0.015,
+        tpPct: 0.025
+      },
+      regime,
+      prediction: {
+        model: "synthetic-v1",
+        direction,
+        confidence: direction === "neutral" ? null : (0.55 + Math.random() * 0.35),
+        score: direction === "neutral" ? null : (30 + Math.random() * 40 + (direction === "long" ? 20 : -20)),
+        success
       }
     });
   }
